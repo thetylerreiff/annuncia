@@ -2,6 +2,8 @@
 # Builds Annuncia.app. macOS only grants camera/microphone/screen access to a bundled app with
 # usage descriptions, so run the bundle rather than the bare binary.
 set -euo pipefail
+# Name the command that stopped the script; set -e alone exits without a word.
+trap 'echo "error: ${BASH_SOURCE[0]##*/} line $LINENO: \"$BASH_COMMAND\" exited $?" >&2' ERR
 
 cd "$(dirname "$0")/.."
 profile="${1:-release}"

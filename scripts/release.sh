@@ -17,6 +17,8 @@
 #                 or the keychain item generate_keys made
 #   GitHub        GH_TOKEN, or a signed-in `gh`
 set -euo pipefail
+# Name the command that stopped the script; set -e alone exits without a word.
+trap 'echo "error: ${BASH_SOURCE[0]##*/} line $LINENO: \"$BASH_COMMAND\" exited $?" >&2' ERR
 
 cd "$(dirname "$0")/.."
 channel="${1:-stable}"

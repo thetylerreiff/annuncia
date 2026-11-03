@@ -5,6 +5,8 @@
 #
 #   scripts/dmg.sh target/release/Annuncia.app target/release/Annuncia.dmg
 set -euo pipefail
+# Name the command that stopped the script; set -e alone exits without a word.
+trap 'echo "error: ${BASH_SOURCE[0]##*/} line $LINENO: \"$BASH_COMMAND\" exited $?" >&2' ERR
 
 cd "$(dirname "$0")/.."
 app="$1"
