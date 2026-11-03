@@ -45,9 +45,9 @@ pub fn silences(pcm: &[f32], min_seconds: f64) -> Vec<Range<f64>> {
     let mut frames = SpeechFrames::default();
     let mut out = Vec::new();
     let mut quiet_from: Option<usize> = None;
-    let chunks = pcm.chunks_exact(FRAME_SAMPLES);
+    let (chunks, _) = pcm.as_chunks::<FRAME_SAMPLES>();
     let count = chunks.len();
-    for (i, frame) in chunks.enumerate() {
+    for (i, frame) in chunks.iter().enumerate() {
         if frames.is_speech(frame) {
             if let Some(from) = quiet_from.take()
                 && (i - from) as f64 * frame_secs >= min_seconds
