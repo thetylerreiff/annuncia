@@ -217,7 +217,7 @@ These aren't built yet:
 - A display picker (today it records the main display)
 - Optional upload to cloud storage for share links
 
-Issues and pull requests are welcome. Before sending a change, run `cargo fmt` and `cargo clippy`, and test the bundled app with `./scripts/bundle.sh`.
+Annuncia isn't taking pull requests yet, but bug reports and ideas are welcome as [issues](https://github.com/thetylerreiff/annuncia/issues). See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Credits
 
