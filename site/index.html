@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Annuncia: the screen recorder in your Mac's notch</title>
+<meta name="description" content="Annuncia is a free, open-source screen recorder for macOS. Record your screen, voice and face, trim and transcribe on your Mac, and paste the file anywhere. No account, nothing uploaded.">
+<meta name="theme-color" content="#0d0d24">
+<link rel="icon" type="image/png" href="/images/icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wdth,wght@75..100,400..700&display=swap">
+<link rel="stylesheet" href="/src/style.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="nav" id="nav">
+  <a class="brand" href="#top" aria-label="Annuncia, back to top"><img src="/images/icon.png" alt="" width="26" height="26"><span>Annuncia</span></a>
+  <nav aria-label="Primary">
+    <a class="nl" href="#record">Features</a>
+    <a class="nl" href="#cloud">Cloud</a>
+    <a class="nl" href="https://github.com/thetylerreiff/annuncia">GitHub</a>
+    <a class="nav-dl" href="https://github.com/thetylerreiff/annuncia/releases">Download</a>
+  </nav>
+</header>
+
+<!-- The page's own recording: hangs from the top edge of the viewport once the art has gone into the notch. -->
+<div class="notch" id="notch" role="group" aria-label="Demo recording controls">
+  <div class="wing wl">
+    <button class="nb n-restart" type="button" aria-label="Restart the demo timer"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.2 8a4.8 4.8 0 1 0 1.5-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M3.6 2.4v2.8h2.8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+    <span class="rdot" aria-hidden="true"></span><span class="ntime" id="ntime">0:00</span>
+  </div>
+  <div class="cam" aria-hidden="true"></div>
+  <div class="wing wr">
+    <button class="nb n-pause" type="button" aria-label="Pause the demo recording" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><rect class="pz" x="4" y="3.5" width="2.6" height="9" rx=".8"/><rect class="pz" x="9.4" y="3.5" width="2.6" height="9" rx=".8"/><path class="pl" d="M5 3.4v9.2l7.6-4.6z"/></svg></button>
+    <a class="nb n-stop" href="#stop" aria-label="Stop the demo recording"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3.5" y="3.5" width="9" height="9" rx="2"/></svg></a>
+    <button class="nb n-discard" type="button" aria-label="Discard the demo recording"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 4.5l7 7m0-7l-7 7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button>
+  </div>
+</div>
+
+<main id="main">
+
+<!-- Overture: the art, which collapses into the notch as you scroll -->
+<section class="overture" id="top" aria-labelledby="wordmark">
+  <div class="ov-stage" id="ovStage">
+    <canvas class="ov-canvas" id="ovCanvas" role="img" aria-label="The archangel Gabriel, drawn in one-bit dithered silver on deep indigo, with fine blue rays behind him."></canvas>
+    <div class="ov-shade" aria-hidden="true"></div>
+    <div class="ov-copy">
+      <div class="ov-row">
+        <p class="ov-lede">A screen recorder for your Mac. Record your screen, your voice and your face, then trim it, transcribe it and send it without anything leaving the machine.</p>
+        <p class="ov-def"><span class="def-w">annuncia</span> <span class="def-p">Latin, “announce.”</span> Named for the Annunciation, when Gabriel delivered a message on someone else’s behalf.</p>
+        <div class="ov-cta">
+          <a class="btn btn-blue" href="https://github.com/thetylerreiff/annuncia/releases"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5v8m0 0L4.8 7.3M8 10.5l3.2-3.2M3 13.5h10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>Download for Mac</a>
+          <a class="btn btn-line" href="https://github.com/thetylerreiff/annuncia">View source</a>
+        </div>
+      </div>
+      <h1 class="wordmark" id="wordmark">Annuncia</h1>
+    </div>
+    <div class="ov-statement" id="ovStatement">
+      <p class="st-line st-a">You record it now.</p>
+      <p class="st-line st-b">They watch it later.</p>
+      <p class="st-sub">Annuncia lives in the menu bar. It records your screen, voice and face, and the controls wrap around the notch. <span class="st-look">Look up.</span></p>
+    </div>
+  </div>
+</section>
+
+<!-- Record -->
+<section class="sec record" id="record" aria-labelledby="record-h">
+  <div class="wrap rec-head">
+    <div class="rec-copy reveal">
+      <p class="kicker">Recording</p>
+      <h2 id="record-h">The recorder is the notch.</h2>
+      <p class="body">While you record, the controls wrap around the notch on your MacBook: the timer on the left, pause and stop on the right, restart and discard when you hover. They never appear in the video. Pause and resume are instant.</p>
+      <p class="body muted">On Macs without a notch, the same controls sit in a small capsule under the menu bar.</p>
+    </div>
+    <figure class="anatomy reveal">
+      <div class="an-screen">
+        <div class="an-menubar" aria-hidden="true"><i style="width:14px"></i><i style="width:46px"></i><i style="width:30px"></i><i class="sp"></i><i style="width:20px"></i><i style="width:52px"></i></div>
+        <div class="an-unit">
+        <div class="an-notch" aria-hidden="true">
+          <div class="an-wing an-l"><span class="an-ic an-restart"><svg viewBox="0 0 16 16"><path d="M3.2 8a4.8 4.8 0 1 0 1.5-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M3.6 2.4v2.8h2.8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="rdot"></span><span class="an-time" id="anTime">0:00</span></div>
+          <div class="an-cam"></div>
+          <div class="an-wing an-r"><span class="an-ic"><svg viewBox="0 0 16 16"><rect x="4" y="3.5" width="2.6" height="9" rx=".8" fill="currentColor"/><rect x="9.4" y="3.5" width="2.6" height="9" rx=".8" fill="currentColor"/></svg></span><span class="an-ic an-stop"><svg viewBox="0 0 16 16"><rect x="3.5" y="3.5" width="9" height="9" rx="2"/></svg></span><span class="an-ic an-discard"><svg viewBox="0 0 16 16"><path d="M4.5 4.5l7 7m0-7l-7 7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span></div>
+        </div>
+          <div class="an-notes" aria-hidden="true">
+            <span class="an-n n1">Timer</span>
+            <span class="an-n n3">Pause and stop</span>
+            <span class="an-n n2">Restart and discard appear on hover</span>
+          </div>
+        </div>
+      </div>
+      <div class="an-capsule" aria-hidden="true">
+        <div class="cap-bar"><i style="width:14px"></i><i style="width:46px"></i><i style="width:30px"></i></div>
+        <div class="cap"><span class="rdot"></span><span>0:42</span><i class="cap-p"></i><i class="cap-s"></i></div>
+        <p class="an-capnote">No notch? The same controls, in a capsule under the menu bar.</p>
+      </div>
+      <figcaption class="sr">The recording controls around the MacBook notch: timer on the left; pause and stop on the right; restart and discard on hover. On Macs without a notch, a small capsule under the menu bar.</figcaption>
+    </figure>
+  </div>
+
+  <div class="wrap">
+    <div class="take">
+      <p class="take-label" id="takeLabel"><span class="rdot" aria-hidden="true"></span>What the video sees</p>
+      <div class="desk" id="desk" aria-label="A simulated Mac desktop being recorded, with Gabriel presenting in a round camera bubble">
+        <div class="desk-menubar" aria-hidden="true">
+          <span class="mb-apple"></span><span class="mb-w" style="width:52px"></span><span class="mb-w" style="width:34px"></span><span class="mb-w" style="width:40px"></span>
+          <span class="mb-sp"></span>
+          <span class="mb-icon"><img src="/images/icon.png" alt=""></span><span class="mb-w" style="width:22px"></span><span class="mb-w" style="width:58px"></span>
+        </div>
+        <div class="desk-win" aria-hidden="true">
+          <div class="dw-bar"><i></i><i></i><i></i><span>Launch plan</span></div>
+          <div class="dw-body">
+            <div class="dw-side"><b style="width:70%"></b><b style="width:54%"></b><b class="on" style="width:78%"></b><b style="width:46%"></b><b style="width:62%"></b></div>
+            <div class="dw-main">
+              <p class="dw-h">Launch plan</p>
+              <div class="dw-rows"><b style="width:86%"></b><b style="width:72%"></b><b style="width:80%"></b></div>
+              <div class="dw-chart"><i style="height:38%"></i><i style="height:52%"></i><i style="height:46%"></i><i style="height:70%"></i><i class="hi" style="height:88%"></i><i style="height:64%"></i></div>
+            </div>
+          </div>
+        </div>
+        <div class="cursor" id="cursor" aria-hidden="true"><svg viewBox="0 0 20 24"><path d="M2 2l15 11.2-6.6 1 3.9 7.4-2.8 1.4-3.9-7.5L2 20z" fill="#fff" stroke="#000" stroke-width="1.3" stroke-linejoin="round"/></svg><span class="click"></span></div>
+        <div class="bubble" id="bubble" data-size="m" tabindex="0" role="img" aria-label="Camera bubble with Gabriel presenting. Drag to move it.">
+          <canvas id="bubbleCanvas"></canvas>
+        </div>
+      </div>
+      <div class="bubble-bar" role="group" aria-label="Camera bubble options">
+        <div class="bb-group">
+          <span class="bb-label" id="sizeLabel">Size</span>
+          <div class="seg" role="radiogroup" aria-labelledby="sizeLabel">
+            <button type="button" role="radio" aria-checked="false" data-size="s">Small</button>
+            <button type="button" role="radio" aria-checked="true" data-size="m">Medium</button>
+            <button type="button" role="radio" aria-checked="false" data-size="l">Large</button>
+          </div>
+        </div>
+        <div class="bb-group">
+          <button type="button" class="tog" id="togPop" aria-pressed="true"><span class="sw" aria-hidden="true"></span>Pop out</button>
+          <button type="button" class="tog" id="togCam" aria-pressed="true"><span class="sw" aria-hidden="true"></span>Camera</button>
+        </div>
+        <p class="bb-hint">Drag the bubble anywhere.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="wrap rec-more">
+    <div class="rm-copy reveal">
+      <h3>Round, mirrored, and yours to place.</h3>
+      <p class="body">The camera bubble mirrors you like a mirror would. Drag it to any corner, pick one of three sizes, or show an avatar while the camera is off. Pop out uses person segmentation so your head rises above the top of the circle.</p>
+    </div>
+    <div class="rm-copy reveal">
+      <h3>Lives in the menu bar.</h3>
+      <p class="body">Record the full screen or a single window. Your microphone carries the voiceover, and system audio comes along if you want it. Global shortcuts start and stop, pause, cancel, and toggle the camera.</p>
+    </div>
+    <div class="popover reveal" aria-label="Menu bar options, simulated" role="group">
+      <div class="po-seg" role="radiogroup" aria-label="What to record">
+        <button type="button" role="radio" aria-checked="true">Full screen</button>
+        <button type="button" role="radio" aria-checked="false">Window</button>
+      </div>
+      <button type="button" class="po-row" aria-pressed="true"><span>Microphone</span><span class="sw" aria-hidden="true"></span></button>
+      <button type="button" class="po-row" aria-pressed="false"><span>System audio</span><span class="sw" aria-hidden="true"></span></button>
+      <button type="button" class="po-row" aria-pressed="true"><span>Camera</span><span class="sw" aria-hidden="true"></span></button>
+      <a class="po-go" href="#top"><span class="rdot" aria-hidden="true"></span>Start recording</a>
+    </div>
+  </div>
+</section>
+
+<!-- Stop: the notch comes down -->
+<section class="stop" id="stop" aria-labelledby="stop-h">
+  <div class="stop-stage">
+    <div class="screen">
+      <div class="scr-dots" aria-hidden="true"></div>
+      <div class="drop" id="drop">
+        <div class="drop-strip" aria-hidden="true">
+          <span class="ds-l"><span class="rdot"></span><span id="dropTime">0:00</span></span>
+          <span class="ds-r"><i class="ds-p"></i><i class="ds-s"></i></span>
+        </div>
+        <div class="drop-panel">
+          <div class="dp-top">
+            <div class="dp-thumb" aria-hidden="true"><span class="th-win"></span><span class="th-bub"></span><span class="th-dur" id="dropDur">0:00</span></div>
+            <div class="dp-meta"><p class="dp-title">Launch plan</p><p class="dp-sub">Saved as MP4 in your folder</p></div>
+          </div>
+          <div class="dp-actions">
+            <button type="button" class="dpa dpa-main" data-say="Copied the file. Paste it into Slack, Mail or Messages.">Copy</button>
+            <button type="button" class="dpa" data-say="Copied the transcript.">Copy transcript</button>
+            <a class="dpa" href="#edit">Edit</a>
+            <a class="dpa" href="#library">Open</a>
+          </div>
+          <p class="dp-say" id="dpSay" role="status" aria-live="polite"></p>
+        </div>
+      </div>
+      <div class="stop-copy">
+        <h2 id="stop-h">Stop. It’s ready to send.</h2>
+        <p class="body">The notch drops down with the recording. Copy puts the file itself on your clipboard, so you can paste it into Slack, Mail or Messages. Or copy the transcript, open the editor, or open the file.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Edit -->
+<section class="sec edit" id="edit" aria-labelledby="edit-h">
+  <div class="wrap">
+    <div class="said-block" id="said">
+      <div class="said-cap"><span class="said-kicker">Edit</span><span class="said-meta">Launch plan</span></div>
+      <p class="said"><span class="sr">“So, here’s the plan for the launch. We ship the editor first.” The filler words “um” and “uh” are struck out and cut from the sentence and its waveform.</span><span class="said-words" id="saidWords" aria-hidden="true"></span></p>
+      <div class="said-wave"><canvas id="saidWave" aria-hidden="true"></canvas></div>
+    </div>
+  </div>
+  <div class="wrap edit-head reveal">
+    <h2 id="edit-h">Cut the ums. Keep the point.</h2>
+    <p class="body">One click on Clean up cuts filler words like these, trims dead air and shortens long pauses across the whole recording. Split into clips and drag the handles to trim. Every cut lands on an exact frame, and each one stays a clip you can drag back.</p>
+  </div>
+  <div class="wrap">
+    <div class="win editor" id="editor">
+      <div class="win-bar">
+        <span class="lights" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span class="win-title">Launch plan</span>
+        <span class="ed-dur"><span id="edDur">0:45.0</span></span>
+        <button type="button" class="btn-sm btn-blue" id="cleanBtn" aria-pressed="false">Clean up</button>
+      </div>
+      <div class="ed-body">
+        <div class="ed-preview" aria-hidden="true">
+          <div class="pv-frame"><span class="pv-win"></span><span class="pv-bub"></span><span class="pv-time" id="pvTime">0:00.00</span></div>
+        </div>
+        <div class="ed-timeline">
+          <div class="ed-ruler" id="edRuler" aria-hidden="true"></div>
+          <div class="ed-track" id="edTrack" aria-label="Timeline of clips"></div>
+          <div class="ed-tray">
+            <span class="tray-label">Cut by Clean up</span>
+            <div class="tray-chips" id="trayChips"><span class="tray-empty">Nothing yet. Press Clean up.</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Transcript -->
+<section class="sec transcript" id="transcript" aria-labelledby="tr-h">
+  <div class="wrap tr-grid">
+    <div class="sec-head tr-head reveal">
+      <p class="kicker">Transcripts</p>
+      <h2 id="tr-h">Every word, transcribed on your Mac.</h2>
+      <p class="body">A speech model runs on your Mac’s GPU: Parakeet for English, Whisper for other languages. A few minutes of talk transcribes in a second or two. Click any word to jump to it, or copy the whole thing as Markdown in timestamped paragraphs.</p>
+      <div class="tr-engine" aria-label="Transcription status, simulated">
+        <span class="te-dot" aria-hidden="true"></span><span>Parakeet, English, on this Mac’s GPU</span>
+        <span class="te-bar" aria-hidden="true"><i id="teFill"></i></span><span class="te-state" id="teState">Ready</span>
+      </div>
+    </div>
+    <div class="win player reveal">
+      <div class="win-bar">
+        <span class="lights" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span class="win-title">Launch plan</span>
+        <div class="tabs" role="tablist" aria-label="Transcript view">
+          <button type="button" role="tab" aria-selected="true" id="tabText" aria-controls="trText">Transcript</button>
+          <button type="button" role="tab" aria-selected="false" id="tabMd" aria-controls="trMd">Markdown</button>
+        </div>
+      </div>
+      <div class="pl-body">
+        <div class="pl-video" aria-hidden="true">
+          <div class="pv-frame"><span class="pv-win"></span><span class="pv-bub"></span></div>
+          <div class="pl-scrub"><span class="pl-play"></span><span class="pl-bar"><i id="plFill"></i></span><span class="pl-time" id="plTime">0:00</span></div>
+        </div>
+        <div class="pl-text" id="trText" role="tabpanel" aria-labelledby="tabText"></div>
+        <pre class="pl-md" id="trMd" role="tabpanel" aria-labelledby="tabMd" hidden></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Library -->
+<section class="sec library" id="library" aria-labelledby="lib-h">
+  <div class="wrap lib-head">
+    <div class="sec-head reveal">
+      <p class="kicker">Library</p>
+      <h2 id="lib-h">Find the moment you said it.</h2>
+      <p class="body">Every recording sits in a grid. Open one to play it beside its transcript, rename it, transcribe it on demand, or move it to the Trash. Search reads across every transcript and jumps to the second a phrase was said.</p>
+    </div>
+  </div>
+  <div class="wrap">
+    <div class="win lib" id="lib">
+      <div class="win-bar">
+        <span class="lights" aria-hidden="true"><i></i><i></i><i></i></span>
+        <label class="search">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10.4 10.4L14 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          <span class="sr">Search all transcripts</span>
+          <input id="libSearch" type="search" placeholder="Search transcripts" autocomplete="off" spellcheck="false">
+        </label>
+        <span class="lib-count" id="libCount" aria-live="polite">6 recordings</span>
+      </div>
+      <div class="lib-grid" id="libGrid"></div>
+    </div>
+  </div>
+</section>
+
+<!-- Local + open source -->
+<section class="sec local" id="local" aria-labelledby="local-h">
+  <div class="wrap">
+    <h2 class="big-statement reveal" id="local-h"><span>Everything stays</span> <span>on your Mac.</span></h2>
+    <div class="local-grid">
+      <dl class="specs reveal">
+        <div><dt>No account</dt><dd>Open it and record. There is nothing to sign up for.</dd></div>
+        <div><dt>Nothing uploaded</dt><dd>Recordings, transcripts and search all stay on your disk.</dd></div>
+        <div><dt>Plain files</dt><dd>MP4 files, H.264 or HEVC, in a folder you choose. Settings live in a JSON file.</dd></div>
+        <div><dt>Transcribed locally</dt><dd>On your Mac’s GPU, with Parakeet or Whisper.</dd></div>
+      </dl>
+      <div class="win finder reveal" aria-label="A folder of recordings, simulated">
+        <div class="win-bar"><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span class="win-title">Recordings</span></div>
+        <ul class="files">
+          <li><span class="fi" aria-hidden="true"></span>Launch plan.mp4<span class="fk">HEVC</span></li>
+          <li><span class="fi" aria-hidden="true"></span>Export dialog bug.mp4<span class="fk">H.264</span></li>
+          <li><span class="fi" aria-hidden="true"></span>Onboarding walkthrough.mp4<span class="fk">HEVC</span></li>
+          <li><span class="fi" aria-hidden="true"></span>Weekly update.mp4<span class="fk">HEVC</span></li>
+          <li><span class="fi" aria-hidden="true"></span>Design review.mp4<span class="fk">H.264</span></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="oss reveal">
+      <p class="oss-line"><span>Rust.</span> <span>GPUI.</span> <span>ScreenCaptureKit.</span> <span class="oss-no">No Electron.</span></p>
+      <div class="oss-cols">
+        <p class="body">Annuncia is a native Mac app written in Rust, drawn with GPUI, the UI framework behind the Zed editor. It records through ScreenCaptureKit straight to MP4.</p>
+        <p class="body">It is free and open source under the MIT license. Read it, build it, change it.</p>
+        <a class="link-arrow" href="https://github.com/thetylerreiff/annuncia">Read the source<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 12L12 4m0 0H5.5M12 4v6.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Cloud -->
+<section class="sec cloud" id="cloud" aria-labelledby="cloud-h">
+  <div class="wrap cloud-grid">
+    <div class="reveal">
+      <p class="kicker">Annuncia Cloud <span class="soon">Coming soon</span></p>
+      <h2 id="cloud-h">Share links and team libraries, later.</h2>
+      <p class="body">Annuncia Cloud will be an optional paid service for share links and team libraries. The recorder works on its own today, with no account.</p>
+      <a class="link-arrow" href="https://github.com/thetylerreiff/annuncia">Watch the repo for news<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 12L12 4m0 0H5.5M12 4v6.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+    </div>
+    <div class="cloud-ui reveal" aria-hidden="true">
+      <div class="cu-notch"></div>
+      <div class="cu-panel">
+        <div class="cu-row"><span class="cu-b on">Copy</span><span class="cu-b">Copy transcript</span><span class="cu-b">Edit</span><span class="cu-b">Open</span></div>
+        <div class="cu-share"><span class="cu-link"><i></i><i></i><i></i></span><span class="cu-b cu-ghost">Share link</span><span class="cu-tag">Soon</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Final: the art returns -->
+<section class="finale" id="download" aria-labelledby="fin-h">
+  <canvas class="fin-canvas" id="finCanvas" aria-hidden="true"></canvas>
+  <div class="fin-shade" aria-hidden="true"></div>
+  <div class="wrap fin-copy">
+    <img class="fin-icon" src="/images/icon.png" alt="Annuncia app icon: Gabriel, dithered on a black plate" width="112" height="112">
+    <h2 id="fin-h">Say it once.<br>Let it be watched later.</h2>
+    <div class="fin-cta">
+      <a class="btn btn-blue btn-lg" href="https://github.com/thetylerreiff/annuncia/releases"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5v8m0 0L4.8 7.3M8 10.5l3.2-3.2M3 13.5h10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>Download for Mac</a>
+      <a class="btn btn-line btn-lg" href="https://github.com/thetylerreiff/annuncia">View source</a>
+    </div>
+    <p class="fin-req">macOS 15 Sequoia or later. Built and tested on Apple silicon. Free and MIT licensed.</p>
+  </div>
+</section>
+
+</main>
+
+<footer class="foot">
+  <div class="wrap foot-in">
+    <a class="brand" href="#top"><img src="/images/icon.png" alt="" width="22" height="22"><span>Annuncia</span></a>
+    <nav aria-label="Footer"><a href="https://github.com/thetylerreiff/annuncia">GitHub</a><a href="https://github.com/thetylerreiff/annuncia/releases">Releases</a><a href="https://github.com/thetylerreiff/annuncia/blob/main/LICENSE">MIT License</a><a href="/privacy.html">Privacy</a><a href="/terms.html">Terms</a></nav>
+    <p>© Annuncia</p>
+  </div>
+</footer>
+
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>
