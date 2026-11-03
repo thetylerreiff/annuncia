@@ -32,6 +32,7 @@ The name comes from the Annunciation, where the archangel Gabriel delivers a mes
 - **Transcripts on your Mac.** Turn on transcription and every recording is transcribed locally, in a second or two, by a speech model running on your Mac's GPU. **Copy transcript** puts it on the clipboard as Markdown, in timestamped paragraphs. Nothing is uploaded.
 - **One click to share.** When you stop, the notch drops down with Copy (the file itself, ready to paste into Slack, Mail or Messages), Copy transcript, Edit and Open.
 - **Black glass.** Every window shares the notch's black (Liquid Glass under the recorder panel on macOS 26 and later), with blue marking only what's switched on, and a dithered icon to match.
+- **Updates itself.** Checks for a new version once a day and installs it when you quit. Turn it off in Settings, or check by hand from the menu bar icon.
 - **Plain files.** MP4 (H.264 or HEVC) in a folder you choose, with settings in a JSON file you can edit by hand.
 
 ## Requirements
@@ -54,7 +55,7 @@ cd annuncia
 open target/release/Annuncia.app
 ```
 
-`bundle.sh` builds the binary and wraps it in `Annuncia.app`. Always run the bundle rather than `cargo run`: macOS only grants camera, microphone and screen access to an app bundle that declares why it needs them.
+`bundle.sh` builds the binary and wraps it in `Annuncia.app`, with the [Sparkle](https://sparkle-project.org) updater inside (downloaded once into `target/` and checked against its SHA-256). Always run the bundle rather than `cargo run`: macOS only grants camera, microphone and screen access to an app bundle that declares why it needs them.
 
 ### Code signing
 
@@ -63,10 +64,14 @@ macOS remembers privacy permissions per code signature. `bundle.sh` signs with t
 Without a certificate, the script falls back to ad-hoc signing. That works, but macOS treats every rebuild as a new app, so it asks for permission again and can leave old grants stuck. If that happens, reset Annuncia's grants and relaunch:
 
 ```bash
-tccutil reset ScreenCapture dev.annuncia.Annuncia
-tccutil reset Camera dev.annuncia.Annuncia
-tccutil reset Microphone dev.annuncia.Annuncia
+tccutil reset ScreenCapture co.thetylerreiff.Annuncia
+tccutil reset Camera co.thetylerreiff.Annuncia
+tccutil reset Microphone co.thetylerreiff.Annuncia
 ```
+
+### Releasing
+
+`scripts/release.sh` publishes the version in `Cargo.toml`: it builds and signs the app with a Developer ID certificate, notarizes it, uploads it to a GitHub release and adds it to the update feed, `site/public/appcast.xml`, which installed copies check once the site deploys. It needs notarization credentials saved once with `xcrun notarytool store-credentials annuncia`, and the Sparkle signing key in the login keychain.
 
 ### Permissions
 
@@ -178,6 +183,7 @@ Shortcuts use the [`global-hotkey`](https://crates.io/crates/global-hotkey) form
 | Pop-out bubble | `src/popout.rs` | Vision's person segmentation separates you from your background on each camera frame; Core Image composites the background in the circle, the ring, and you on top (free to rise above the circle, never out of its sides) into a transparent frame shown on a native layer under the bubble's view. |
 | Camera | `src/camera.rs` | An `AVCaptureSession` delivers NV12 frames that go straight into GPUI's `surface()` element, with no copying or conversion. |
 | Controller | `src/app.rs` | One GPUI entity owns the recording state and keeps the windows, camera and menu bar icon in sync with it. |
+| Updates | `src/updater.rs`, `scripts/release.sh` | [Sparkle](https://sparkle-project.org), loaded from the bundle at runtime. Updates are EdDSA-signed zips on GitHub Releases, listed in a feed on the website. |
 | Menu bar and shortcuts | `src/tray.rs`, `src/hotkeys.rs` | [`tray-icon`](https://crates.io/crates/tray-icon) and [`global-hotkey`](https://crates.io/crates/global-hotkey), read from a GPUI task. |
 | Native windows | `src/native.rs` | AppKit through `objc2`: non-activating panels, window levels above the menu bar, notch size from the screen's safe area, and Liquid Glass. |
 | UI | `src/ui/` | The notch HUD, camera bubble, recorder panel and Settings window, all in GPUI. |
@@ -199,6 +205,7 @@ Issues and pull requests are welcome. Before sending a change, run `cargo fmt` a
 
 - The header image is a painting of the archangel Gabriel, rendered with Atkinson dithering, the 1-bit technique Bill Atkinson created for the original Macintosh.
 - Speech recognition runs on [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) (MIT). The models are downloaded from Hugging Face, not bundled: [Parakeet Unified English](https://huggingface.co/handy-computer/parakeet-unified-en-0.6b-gguf) is under the NVIDIA Open Model License, and [Whisper large-v3-turbo](https://huggingface.co/handy-computer/whisper-large-v3-turbo-gguf) is MIT.
+- Updates through [Sparkle](https://sparkle-project.org) (MIT).
 - Built on [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui), [screencapturekit-rs](https://github.com/doom-fish/screencapturekit-rs), [objc2](https://github.com/madsmtm/objc2), [tray-icon](https://github.com/tauri-apps/tray-icon) and [global-hotkey](https://github.com/tauri-apps/global-hotkey).
 
 ## License

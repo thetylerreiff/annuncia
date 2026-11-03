@@ -16,6 +16,7 @@ mod transcriber;
 mod transcript;
 mod tray;
 mod ui;
+mod updater;
 
 fn main() {
     app::run();

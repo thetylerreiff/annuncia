@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Annuncia's update feed, read by Sparkle in the app. scripts/release.sh adds each release. -->
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>Annuncia</title>
+    <link>https://annuncia.thetylerreiff.co/appcast.xml</link>
+    <language>en</language>
+    <!-- releases -->
+  </channel>
+</rss>

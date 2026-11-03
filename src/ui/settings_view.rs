@@ -200,6 +200,7 @@ impl Render for SettingsView {
                 ),
                 theme,
             ))
+            .children(self.updates_row(theme, cx))
             .child(row(
                 "Settings file",
                 Some(tilde(&settings::settings_path())),
@@ -514,6 +515,41 @@ fn about(theme: Theme) -> AnyElement {
 }
 
 impl SettingsView {
+    /// Updates, when running from the app bundle (Sparkle isn't there otherwise). The switch
+    /// reads Sparkle's own preference, so it redraws this view itself.
+    fn updates_row(&self, theme: Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let automatic = self.state.read(cx).updater.as_ref()?.automatic();
+        let state = self.state.clone();
+        let control = div()
+            .flex()
+            .items_center()
+            .gap(px(10.))
+            .child(
+                button("check-updates", "Check Now", false, theme)
+                    .on_click(move |_, _, cx| state.update(cx, |s, cx| s.check_for_updates(cx))),
+            )
+            .child(toggle(
+                "auto-update",
+                automatic,
+                theme,
+                Box::new(cx.listener(move |this, _, _, cx| {
+                    if let Some(updater) = &this.state.read(cx).updater {
+                        updater.set_automatic(!automatic);
+                    }
+                    cx.notify();
+                })),
+            ));
+        Some(
+            row(
+                "Install updates automatically",
+                Some("Checks once a day and installs when you quit Annuncia".into()),
+                control,
+                theme,
+            )
+            .into_any_element(),
+        )
+    }
+
     /// Transcribe: which local model (or off), with the model's download state underneath.
     fn transcription_row(
         &self,

@@ -11,10 +11,14 @@ else
   cargo build
 fi
 
+version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
 app="target/$profile/Annuncia.app"
 rm -rf "$app"
-mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$app/Contents/Frameworks"
 cp "target/$profile/annuncia" "$app/Contents/MacOS/Annuncia"
+
+# Sparkle, the updater. The app loads it at runtime, so a bare `cargo run` works without it.
+ditto "$(scripts/sparkle.sh)/Sparkle.framework" "$app/Contents/Frameworks/Sparkle.framework"
 
 # App icon: every size macOS asks for, cut from the 1024 px master with the system's own tools.
 iconset="$(mktemp -d)/Annuncia.iconset"
@@ -30,20 +34,24 @@ cat > "$app/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleIdentifier</key><string>dev.annuncia.Annuncia</string>
+  <key>CFBundleIdentifier</key><string>co.thetylerreiff.Annuncia</string>
   <key>CFBundleName</key><string>Annuncia</string>
   <key>CFBundleDisplayName</key><string>Annuncia</string>
   <key>CFBundleExecutable</key><string>Annuncia</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
-  <key>CFBundleShortVersionString</key><string>0.1.0</string>
-  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleShortVersionString</key><string>$version</string>
+  <key>CFBundleVersion</key><string>$version</string>
   <key>LSMinimumSystemVersion</key><string>15.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSCameraUsageDescription</key><string>Annuncia shows your camera in a bubble on your recordings.</string>
   <key>NSCameraUseContinuityCameraDeviceType</key><true/>
   <key>NSMicrophoneUsageDescription</key><string>Annuncia records your voiceover.</string>
+  <key>SUFeedURL</key><string>https://annuncia.thetylerreiff.co/appcast.xml</string>
+  <key>SUPublicEDKey</key><string>ZOkaWi25+g/HEDOZlqbU69ASiOkd6UzdiOrwPYBHDFk=</string>
+  <key>SUEnableAutomaticChecks</key><true/>
+  <key>SUAutomaticallyUpdate</key><true/>
 </dict>
 </plist>
 PLIST
@@ -57,5 +65,17 @@ if [[ -z "$identity" ]]; then
   echo "warning: no signing identity found; signing ad-hoc (permissions reset on every rebuild)" >&2
   identity="-"
 fi
-codesign --force --sign "$identity" "$app"
+# Notarization needs a secure timestamp, which asks Apple's server; release.sh turns it on.
+sign=(codesign --force --sign "$identity" --options runtime)
+if [[ "${ANNUNCIA_TIMESTAMP:-}" == 1 ]]; then
+  sign+=(--timestamp)
+fi
+# Inside out, as Sparkle's docs lay out: its helpers, the framework, then the app.
+sparkle="$app/Contents/Frameworks/Sparkle.framework/Versions/B"
+"${sign[@]}" "$sparkle/XPCServices/Installer.xpc"
+"${sign[@]}" --preserve-metadata=entitlements "$sparkle/XPCServices/Downloader.xpc"
+"${sign[@]}" "$sparkle/Autoupdate"
+"${sign[@]}" "$sparkle/Updater.app"
+"${sign[@]}" "$app/Contents/Frameworks/Sparkle.framework"
+"${sign[@]}" --entitlements scripts/Annuncia.entitlements "$app"
 echo "$app"

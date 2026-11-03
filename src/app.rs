@@ -26,6 +26,7 @@ use crate::ui::editor::{self, Editor};
 use crate::ui::hud::{self, Hud};
 use crate::ui::launcher::{self, Launcher};
 use crate::ui::library::LibraryView;
+use crate::updater::Updater;
 
 /// Owns the controller for the life of the app.
 struct AppState {
@@ -156,6 +157,8 @@ pub struct Annuncia {
     pub library_revision: u64,
     library_window: Option<WindowHandle<LibraryView>>,
     library_opening: bool,
+    /// Sparkle, when running from the app bundle.
+    pub updater: Option<Updater>,
     last_tick: u64,
 }
 
@@ -194,6 +197,7 @@ impl Annuncia {
             .map(|h| h.apply(&settings.hotkeys))
             .unwrap_or_default();
         let (events_tx, events_rx) = channel();
+        let updater = Updater::start();
 
         cx.spawn(async move |this, cx| {
             loop {
@@ -235,7 +239,7 @@ impl Annuncia {
             pending_finish: None,
             events_tx,
             events_rx,
-            tray: Tray::new().expect("menu bar icon"),
+            tray: Tray::new(updater.is_some()).expect("menu bar icon"),
             hotkeys,
             launcher: None,
             launcher_closed_at: None,
@@ -253,6 +257,7 @@ impl Annuncia {
             library_revision: 0,
             library_window: None,
             library_opening: false,
+            updater,
             last_tick: u64::MAX,
         }
     }
@@ -270,6 +275,7 @@ impl Annuncia {
                 }
                 TrayAction::OpenSettings => self.open_settings(cx),
                 TrayAction::OpenLibrary => self.open_library(cx),
+                TrayAction::CheckForUpdates => self.check_for_updates(cx),
                 TrayAction::Quit => self.quit(cx),
             }
         }
@@ -799,6 +805,14 @@ impl Annuncia {
             let handle = editor::open(state.clone(), path, active, cx);
             state.update(cx, |s, _| s.editor_window = handle);
         });
+    }
+
+    /// Sparkle's window needs the app in front; a menu bar app usually isn't.
+    pub fn check_for_updates(&mut self, cx: &mut Context<Self>) {
+        if let Some(updater) = &self.updater {
+            cx.activate(true);
+            updater.check();
+        }
     }
 
     pub fn open_library(&mut self, cx: &mut Context<Self>) {

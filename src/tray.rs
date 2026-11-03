@@ -14,6 +14,7 @@ pub enum TrayAction {
     OpenLibrary,
     OpenFolder,
     OpenSettings,
+    CheckForUpdates,
     Quit,
 }
 
@@ -40,10 +41,12 @@ const LAUNCHER: &str = "launcher";
 const LIBRARY: &str = "library";
 const FOLDER: &str = "folder";
 const SETTINGS: &str = "settings";
+const UPDATES: &str = "updates";
 const QUIT: &str = "quit";
 
 impl Tray {
-    pub fn new() -> anyhow::Result<Self> {
+    /// `updates` is false outside the app bundle, where there's no updater.
+    pub fn new(updates: bool) -> anyhow::Result<Self> {
         let toggle_item = MenuItem::with_id(TOGGLE, "Start Recording", true, None);
         let pause_item = MenuItem::with_id(PAUSE, "Pause Recording", false, None);
         let restart_item = MenuItem::with_id(RESTART, "Restart Recording", false, None);
@@ -57,6 +60,7 @@ impl Tray {
             &MenuItem::with_id(LIBRARY, "Library…", true, None),
             &MenuItem::with_id(FOLDER, "Open Recordings Folder", true, None),
             &MenuItem::with_id(SETTINGS, "Settings…", true, None),
+            &MenuItem::with_id(UPDATES, "Check for Updates…", updates, None),
             &PredefinedMenuItem::separator(),
             &MenuItem::with_id(QUIT, "Quit Annuncia", true, None),
         ])?;
@@ -96,6 +100,7 @@ impl Tray {
                 LIBRARY => TrayAction::OpenLibrary,
                 FOLDER => TrayAction::OpenFolder,
                 SETTINGS => TrayAction::OpenSettings,
+                UPDATES => TrayAction::CheckForUpdates,
                 QUIT => TrayAction::Quit,
                 _ => continue,
             });
