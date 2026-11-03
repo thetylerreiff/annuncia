@@ -31,7 +31,10 @@ jobs:
     needs: changed
     if: needs.changed.outputs.build == 'true'
     runs-on: macos-26
-    environment: release
+    # Holds its own copy of the signing secrets; limited to main.
+    environment:
+      name: nightly
+      url: https://github.com/thetylerreiff/annuncia/releases/tag/nightly
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable

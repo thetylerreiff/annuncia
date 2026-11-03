@@ -79,7 +79,7 @@ To release, bump the version in `Cargo.toml`, commit, and push a matching tag:
 git tag v0.2.0 && git push origin v0.2.0
 ```
 
-The Release workflow then runs `scripts/release.sh`, which builds and signs the app with a Developer ID certificate, notarizes it and a disk image for the website (`scripts/dmg.sh`, laid out on the background in `assets/dmg`), uploads both to a GitHub release and adds it to the update feed, `site/public/appcast.xml`, on `main`. Installed copies pick it up once the site deploys. The workflow takes its credentials from the `release` environment's secrets:
+The Release workflow then runs `scripts/release.sh`, which builds and signs the app with a Developer ID certificate, notarizes it and a disk image for the website (`scripts/dmg.sh`, laid out on the background in `assets/dmg`), uploads both to a GitHub release and adds it to the update feed, `site/public/appcast.xml`, on `main`. Installed copies pick it up once the site deploys. The workflow takes its credentials from environment secrets:
 
 | Secret | What it is |
 | --- | --- |
@@ -87,7 +87,7 @@ The Release workflow then runs `scripts/release.sh`, which builds and signs the 
 | `NOTARY_KEY`, `NOTARY_KEY_ID`, `NOTARY_ISSUER` | An App Store Connect API key (the `.p8` file's contents, its key ID and the issuer ID) |
 | `SPARKLE_KEY` | The Sparkle signing key, exported with `generate_keys --account annuncia -x` |
 
-The Nightly workflow builds `main` every night it has changed (or whenever you run it by hand) with `scripts/release.sh nightly`. A nightly is versioned after the release it's built on, such as `0.2.0.57`, and replaces the last one on the rolling [`nightly` prerelease](https://github.com/thetylerreiff/annuncia/releases/tag/nightly), which also holds the nightly feed. Both workflows use the `release` environment, so limit it to `main` and `v*` tags.
+The Nightly workflow builds `main` every night it has changed (or whenever you run it by hand) with `scripts/release.sh nightly`. A nightly is versioned after the release it's built on, such as `0.2.0.57`, and replaces the last one on the rolling [`nightly` prerelease](https://github.com/thetylerreiff/annuncia/releases/tag/nightly), which also holds the nightly feed. The Release workflow takes its secrets from the `stable` environment, limited to `v*` tags, and Nightly from the `nightly` environment, limited to `main`; each holds the same six.
 
 `release.sh` also runs on a Mac from the tagged commit, with the same credentials from the login keychain and a notary profile saved as `annuncia`.
 

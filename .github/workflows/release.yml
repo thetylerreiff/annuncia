@@ -15,8 +15,10 @@ permissions:
 jobs:
   release:
     runs-on: macos-26
-    # Holds the signing secrets, shared with Nightly; limit it to main and v* tags.
-    environment: release
+    # Holds the signing secrets; limited to v* tags. Shows as "stable" under Deployments.
+    environment:
+      name: stable
+      url: https://github.com/thetylerreiff/annuncia/releases/tag/${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v7
         with:
