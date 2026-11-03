@@ -46,7 +46,7 @@ case "$channel" in
     ;;
 esac
 identity="${ANNUNCIA_SIGN_IDENTITY:-$(security find-identity -v -p codesigning \
-  | grep -E '"Developer ID Application:' | head -n1 | awk '{print $2}')}"
+  | awk '/"Developer ID Application:/ { print $2; exit }')}"
 if [[ -z "$identity" ]]; then
   echo "error: releases need a Developer ID Application certificate" >&2
   exit 1

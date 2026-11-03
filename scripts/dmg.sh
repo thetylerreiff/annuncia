@@ -15,7 +15,7 @@ version="1.6.7"
 if command -v uvx >/dev/null; then
   dmgbuild=(uvx --quiet --from "dmgbuild==$version" dmgbuild)
 else
-  venv="target/dmgbuild-$version"
+  venv=".cache/dmgbuild-$version"
   if [[ ! -x "$venv/bin/dmgbuild" ]]; then
     python3 -m venv "$venv"
     "$venv/bin/pip" install --quiet "dmgbuild==$version"

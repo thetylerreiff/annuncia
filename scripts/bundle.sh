@@ -70,8 +70,9 @@ PLIST
 # Sign with a real identity so macOS keeps the privacy grants across rebuilds; an ad-hoc
 # signature changes with every build and leaves Screen Recording/Camera grants stale.
 # Override with ANNUNCIA_SIGN_IDENTITY (a name or SHA-1 from `security find-identity -p codesigning`).
+# (awk, not grep, so finding none falls through to ad hoc instead of failing under pipefail.)
 identity="${ANNUNCIA_SIGN_IDENTITY:-$(security find-identity -v -p codesigning \
-  | grep -E '"(Apple Development|Developer ID Application):' | head -n1 | awk '{print $2}')}"
+  | awk '/"(Apple Development|Developer ID Application):/ { print $2; exit }')}"
 if [[ -z "$identity" ]]; then
   echo "warning: no signing identity found; signing ad-hoc (permissions reset on every rebuild)" >&2
   identity="-"
