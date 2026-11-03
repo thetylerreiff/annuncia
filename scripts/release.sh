@@ -95,7 +95,11 @@ xcrun notarytool submit "$dmg" "${notary[@]}" --wait
 xcrun stapler staple "$dmg"
 
 # The feed entry: Sparkle checks the EdDSA signature against SUPublicEDKey before installing.
-signature="$("$(scripts/sparkle.sh)/bin/sign_update" "${sparkle_key[@]}" "$zip")"
+# Its errors can quote the key, and CI logs are public, so a failure says only that much.
+if ! signature="$("$(scripts/sparkle.sh)/bin/sign_update" "${sparkle_key[@]}" "$zip" 2>/dev/null)"; then
+  echo "error: the Sparkle key couldn't sign the update; it's missing, damaged or not the right key" >&2
+  exit 1
+fi
 item="    <item>
       <title>Version $bundle_version</title>
       <pubDate>$(LC_ALL=C date -u "+%a, %d %b %Y %H:%M:%S +0000")</pubDate>
