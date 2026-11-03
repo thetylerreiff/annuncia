@@ -71,7 +71,23 @@ tccutil reset Microphone co.thetylerreiff.Annuncia
 
 ### Releasing
 
-`scripts/release.sh` publishes the version in `Cargo.toml`: it builds and signs the app with a Developer ID certificate, notarizes it, uploads it to a GitHub release and adds it to the update feed, `site/public/appcast.xml`, which installed copies check once the site deploys. It needs notarization credentials saved once with `xcrun notarytool store-credentials annuncia`, and the Sparkle signing key in the login keychain.
+Every push and pull request runs the CI workflow: formatting, Clippy and a bundle build.
+
+To release, bump the version in `Cargo.toml`, commit, and push a matching tag:
+
+```bash
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+The Release workflow then runs `scripts/release.sh`, which builds and signs the app with a Developer ID certificate, notarizes it, uploads it to a GitHub release and adds it to the update feed, `site/public/appcast.xml`, on `main`. Installed copies pick it up once the site deploys. The workflow takes its credentials from the `release` environment's secrets:
+
+| Secret | What it is |
+| --- | --- |
+| `DEVELOPER_ID_P12`, `DEVELOPER_ID_P12_PASSWORD` | The Developer ID Application certificate and private key, exported as a `.p12` and base64-encoded |
+| `NOTARY_KEY`, `NOTARY_KEY_ID`, `NOTARY_ISSUER` | An App Store Connect API key (the `.p8` file's contents, its key ID and the issuer ID) |
+| `SPARKLE_KEY` | The Sparkle signing key, exported with `generate_keys --account annuncia -x` |
+
+`release.sh` also runs on a Mac from the tagged commit, with the same credentials from the login keychain and a notary profile saved as `annuncia`.
 
 ### Permissions
 
