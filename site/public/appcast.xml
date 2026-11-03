@@ -6,5 +6,13 @@
     <link>https://annuncia.thetylerreiff.co/appcast.xml</link>
     <language>en</language>
     <!-- releases -->
+    <item>
+      <title>Version 0.1.0</title>
+      <pubDate>Tue, 03 Nov 2026 19:17:18 +0000</pubDate>
+      <sparkle:version>0.1.0</sparkle:version>
+      <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/thetylerreiff/annuncia/releases/download/v0.1.0/Annuncia.zip" type="application/octet-stream" sparkle:edSignature="O8zFXT62wdjd+FP7mvDwu6iPoRI+6uxzlJumJaOksZ/b+8/bZrJd/3fRCJ4FSLXKWewlTb4rdKC5l8jTrj4SDQ==" length="8388311"/>
+    </item>
   </channel>
 </rss>
