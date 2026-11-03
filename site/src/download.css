@@ -14,7 +14,43 @@
 .dl-btn:hover { background: #4f4fff; }
 .dl-btn:active { transform: translateY(1px); }
 .dl-btn svg { width: 18px; height: 18px; }
+.dl-btn[hidden] { display: none; }
+.dl-buttons { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; }
+.dl-sub { color: var(--mute); font-size: 13.5px; }
 .dl-note { min-height: 1.4em; max-width: 420px; color: var(--soft); font-size: 14px; line-height: 1.5; }
+.dl-note:empty { display: none; }
+
+/* Nightly: the same button after dark. A deep indigo sky with a few one-pixel stars that
+   twinkle slowly, out of step with each other. */
+.dl-night {
+  position: relative; isolation: isolate; overflow: hidden;
+  background: linear-gradient(180deg, #16163f 0%, #08081c 100%);
+  color: var(--silver);
+  box-shadow: inset 0 0 0 1px rgba(212, 212, 242, .2), 0 12px 36px -18px rgba(61, 61, 255, .55);
+}
+.dl-night:hover { background: linear-gradient(180deg, #1c1c4c 0%, #0b0b24 100%); box-shadow: inset 0 0 0 1px rgba(212, 212, 242, .4), 0 12px 36px -16px rgba(61, 61, 255, .7); }
+.dl-stars, .dl-stars::after { position: absolute; inset: 0; z-index: -1; pointer-events: none; }
+.dl-stars {
+  background:
+    linear-gradient(#fff, #fff) 12% 28% / 1px 1px no-repeat,
+    linear-gradient(#fff, #fff) 31% 72% / 1px 1px no-repeat,
+    linear-gradient(#d4d4f2, #d4d4f2) 58% 22% / 2px 2px no-repeat,
+    linear-gradient(#fff, #fff) 77% 64% / 1px 1px no-repeat,
+    linear-gradient(#fff, #fff) 91% 30% / 1px 1px no-repeat;
+  opacity: .6;
+  animation: dl-twinkle 4.6s ease-in-out infinite alternate;
+}
+.dl-stars::after {
+  content: "";
+  background:
+    linear-gradient(#fff, #fff) 22% 58% / 1px 1px no-repeat,
+    linear-gradient(#d4d4f2, #d4d4f2) 45% 80% / 1px 1px no-repeat,
+    linear-gradient(#fff, #fff) 68% 40% / 1px 1px no-repeat,
+    linear-gradient(#8c8cff, #8c8cff) 86% 78% / 2px 2px no-repeat;
+  animation: dl-twinkle 3.4s ease-in-out -1.7s infinite alternate-reverse;
+}
+@keyframes dl-twinkle { from { opacity: .2; } to { opacity: .75; } }
+@media (prefers-reduced-motion: reduce) { .dl-stars, .dl-stars::after { animation: none; } }
 
 .dl-install {
   max-width: 1080px; margin: 0 auto; padding: 0 var(--gut) clamp(64px, 9vw, 112px); box-sizing: content-box;
@@ -28,16 +64,33 @@
 .dl-shot img { display: block; width: 100%; height: auto; filter: drop-shadow(0 30px 60px rgba(0, 0, 0, .6)) drop-shadow(0 0 1px rgba(255, 255, 255, .25)); }
 
 .dl-more {
-  max-width: 1080px; margin: 0 auto; padding: clamp(40px, 6vw, 64px) var(--gut) clamp(80px, 12vw, 140px); box-sizing: content-box;
-  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 28px clamp(24px, 4vw, 48px);
+  max-width: 1080px; margin: 0 auto; padding: clamp(40px, 6vw, 64px) var(--gut); box-sizing: content-box;
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px clamp(24px, 4vw, 48px);
   border-top: 1px solid var(--line);
 }
 .dl-more p { font-size: 15.5px; }
 .dl-more a { color: var(--text); text-decoration: underline; text-decoration-color: rgba(242, 242, 245, .35); text-underline-offset: 3px; }
 .dl-more a:hover { text-decoration-color: var(--blue); }
 
+.dl-source {
+  max-width: 1080px; margin: 0 auto; padding: clamp(40px, 6vw, 64px) var(--gut) clamp(80px, 12vw, 140px); box-sizing: content-box;
+  display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: clamp(28px, 5vw, 64px); align-items: center;
+  border-top: 1px solid var(--line);
+}
+.dl-source h2 { font-size: 22px; letter-spacing: -.025em; font-weight: 600; }
+.dl-source p { margin-top: 10px; color: var(--soft); font-size: 15.5px; line-height: 1.6; text-wrap: pretty; }
+.dl-source a { color: var(--text); text-decoration: underline; text-decoration-color: rgba(242, 242, 245, .35); text-underline-offset: 3px; }
+.dl-source a:hover { text-decoration-color: var(--blue); }
+.dl-source code, .dl-code { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+.dl-source p code { font-size: .9em; color: var(--text); }
+.dl-code {
+  overflow-x: auto; padding: 22px 24px; border-radius: 12px;
+  background: #07071a; box-shadow: inset 0 0 0 1px rgba(212, 212, 242, .14);
+  color: var(--silver); font-size: 14px; line-height: 1.75;
+}
+
 @media (max-width: 860px) {
   .dl-install { grid-template-columns: 1fr; }
   .dl-shot { order: -1; }
-  .dl-more { grid-template-columns: 1fr; }
+  .dl-more, .dl-source { grid-template-columns: 1fr; }
 }

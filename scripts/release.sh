@@ -68,16 +68,17 @@ out="target/release/dist"
 rm -rf "$out"
 mkdir -p "$out"
 # Nightly zips are named by version: the feed and the zip upload separately, and an old feed
-# must never point at a new zip it has no signature for. Stable names stay fixed, so the
-# website's releases/latest/download/Annuncia.dmg link always finds the newest.
+# must never point at a new zip it has no signature for. The disk images keep fixed names, so
+# the website's links (releases/latest/download/Annuncia.dmg, and releases/download/nightly/
+# Annuncia-Nightly.dmg) download the newest directly.
 if [[ "$channel" == nightly ]]; then
-  base="Annuncia-$bundle_version"
+  name="Annuncia-$bundle_version.zip"
+  dmg="$out/Annuncia-Nightly.dmg"
 else
-  base="Annuncia"
+  name="Annuncia.zip"
+  dmg="$out/Annuncia.dmg"
 fi
-name="$base.zip"
 zip="$out/$name"
-dmg="$out/$base.dmg"
 
 # Notarize, then staple the ticket so Gatekeeper accepts the app offline, and zip it again.
 ditto -c -k --keepParent "$app" "$zip"
@@ -125,8 +126,8 @@ $item
 XML
   gh release upload nightly "$out/appcast.xml" --repo "$repo" --clobber
   for old in $(gh release view nightly --repo "$repo" --json assets \
-    --jq '.assets[].name | select(startswith("Annuncia-"))'); do
-    [[ "$old" == "$base".* ]] || gh release delete-asset nightly "$old" --repo "$repo" --yes
+    --jq '.assets[].name | select(startswith("Annuncia-") and . != "Annuncia-Nightly.dmg")'); do
+    [[ "$old" == "$name" ]] || gh release delete-asset nightly "$old" --repo "$repo" --yes
   done
   echo "Released nightly $bundle_version"
   exit 0

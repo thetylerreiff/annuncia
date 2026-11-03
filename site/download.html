@@ -39,7 +39,11 @@
     <h1>Download Annuncia</h1>
     <p class="dl-meta" id="dlMeta">macOS 15 Sequoia or later · Apple silicon · Free and MIT licensed</p>
     <div class="dl-cta">
-      <a class="dl-btn" id="dlButton" href="https://github.com/thetylerreiff/annuncia/releases/latest/download/Annuncia.dmg"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5v8m0 0L4.8 7.3M8 10.5l3.2-3.2M3 13.5h10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>Download for Mac</a>
+      <div class="dl-buttons">
+        <a class="dl-btn" id="dlButton" href="https://github.com/thetylerreiff/annuncia/releases/latest/download/Annuncia.dmg"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5v8m0 0L4.8 7.3M8 10.5l3.2-3.2M3 13.5h10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>Download for Mac</a>
+        <a class="dl-btn dl-night" id="dlNightly" href="https://github.com/thetylerreiff/annuncia/releases/download/nightly/Annuncia-Nightly.dmg"><span class="dl-stars" aria-hidden="true"></span><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M12.6 10.4A5.4 5.4 0 0 1 5.6 3.4a5.4 5.4 0 1 0 7 7z" fill="currentColor"/></svg>Nightly build</a>
+      </div>
+      <p class="dl-sub">Nightly is built from the latest code every night it changes, and may break.</p>
       <p class="dl-note" id="dlNote" aria-live="polite"></p>
     </div>
   </div>
@@ -72,12 +76,20 @@
     </div>
     <div>
       <h2>Nightly builds</h2>
-      <p>Built from the latest code every night it changes. They update themselves to the next nightly, and may break. <a href="https://github.com/thetylerreiff/annuncia/releases/tag/nightly">Get the nightly</a>, or switch to it in Settings → General.</p>
+      <p>Built from the latest code every night it changes. They update themselves to the next nightly, and may break. Download the nightly above, or switch an installed copy to it in Settings → General. Switching back to Stable keeps your nightly until a release passes it.</p>
     </div>
-    <div>
-      <h2>From source</h2>
-      <p>Annuncia is open source. To build it yourself, follow the steps in the <a href="https://github.com/thetylerreiff/annuncia#build-and-run">README</a>.</p>
+  </section>
+
+  <section class="dl-source" aria-labelledby="source-h">
+    <div class="dl-source-text">
+      <h2 id="source-h">Build it yourself</h2>
+      <p>Annuncia is open source under the MIT License. To build it you need macOS 15 or later, a recent stable <a href="https://rustup.rs">Rust</a>, the Xcode Command Line Tools (<code>xcode-select --install</code>) and <a href="https://cmake.org">CMake</a> (<code>brew install cmake</code>).</p>
+      <p><code>bundle.sh</code> builds the app and signs it with your own Apple Development or Developer ID certificate if you have one, so macOS remembers its permissions between builds. Without one it signs ad hoc, and macOS asks again after every rebuild. The <a href="https://github.com/thetylerreiff/annuncia#build-and-run">README</a> covers the rest.</p>
     </div>
+    <pre class="dl-code"><code>git clone https://github.com/thetylerreiff/annuncia.git
+cd annuncia
+./scripts/bundle.sh
+open target/release/Annuncia.app</code></pre>
   </section>
 </main>
 

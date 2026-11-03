@@ -46,7 +46,7 @@ Development and testing have been on Apple Silicon. Intel Macs are untested.
 
 ## Build and run
 
-There are no prebuilt releases yet, so build from source:
+Download the latest release from [annuncia.thetylerreiff.co](https://annuncia.thetylerreiff.co/download.html): open the disk image and drag Annuncia into Applications. It keeps itself up to date. To build it yourself instead:
 
 ```bash
 git clone https://github.com/thetylerreiff/annuncia.git

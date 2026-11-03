@@ -1,9 +1,9 @@
 // The download page: the newest stable version comes from the update feed on this site, the same
-// one installed copies read. Arriving with ?start (from the landing page's buttons) starts the
-// download straight away.
+// one installed copies read. Both buttons link straight to a disk image (GitHub redirects the
+// fixed release URLs to the file), so nothing opens on GitHub. Arriving with ?start (from the
+// landing page's buttons) starts the stable download straight away.
 
 const SPARKLE = 'http://www.andymatuschak.org/xml-namespaces/sparkle';
-const NIGHTLY = 'https://github.com/thetylerreiff/annuncia/releases/tag/nightly';
 
 const meta = document.getElementById('dlMeta');
 const button = document.getElementById('dlButton');
@@ -24,9 +24,8 @@ latest()
   .catch(() => null)
   .then((release) => {
     if (!release) {
-      // No stable release yet: point at the nightly rather than a download that would fail.
-      button.href = NIGHTLY;
-      button.lastChild.textContent = 'Get the nightly build';
+      // No stable release yet: leave only the nightly rather than a download that would fail.
+      button.hidden = true;
       note.textContent = 'The first stable release is on its way. Until then, the nightly build is the way to try Annuncia.';
       return;
     }
