@@ -1,7 +1,7 @@
 // The download page: the newest stable version comes from the update feed on this site, the same
 // one installed copies read. Both buttons link straight to a disk image (GitHub redirects the
-// fixed release URLs to the file), so nothing opens on GitHub. Arriving with ?start (from the
-// landing page's buttons) starts the stable download straight away.
+// fixed release URLs to the file), so nothing opens on GitHub. Nothing downloads until a
+// button is pressed.
 
 const SPARKLE = 'http://www.andymatuschak.org/xml-namespaces/sparkle';
 
@@ -33,9 +33,4 @@ latest()
       ? ''
       : ` · ${release.date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}`;
     meta.textContent = `Version ${release.version}${when} · macOS 15 Sequoia or later · Apple silicon`;
-    if (new URLSearchParams(location.search).has('start')) {
-      note.textContent = 'Your download should start in a moment. If it doesn’t, use the button.';
-      history.replaceState(null, '', location.pathname);
-      setTimeout(() => location.assign(button.href), 400);
-    }
   });

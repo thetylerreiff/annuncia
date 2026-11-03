@@ -1,6 +1,15 @@
 /* The download page, on the policy pages' shell (legal.css): the button, then how to install. */
 
-.dl-head { text-align: center; padding-bottom: clamp(48px, 7vw, 80px); }
+/* The header: the app icon in a soft indigo glow, its name, and the two downloads. */
+.dl-head { position: relative; text-align: center; padding: clamp(80px, 12vw, 140px) var(--gut) clamp(56px, 8vw, 96px); }
+.dl-head::before {
+  content: ""; position: absolute; left: 50%; top: 40px; width: min(720px, 100%); height: 420px;
+  transform: translateX(-50%); pointer-events: none;
+  background: radial-gradient(closest-side, rgba(61, 61, 255, .22), rgba(61, 61, 255, 0));
+}
+.dl-head > * { position: relative; }
+.dl-icon { display: block; width: clamp(96px, 11vw, 128px); height: auto; margin: 0 auto 28px; filter: drop-shadow(0 22px 44px rgba(61, 61, 255, .4)); }
+.dl-head h1 { font-size: clamp(48px, 7vw, 84px); line-height: .95; letter-spacing: -.055em; font-weight: 600; }
 .dl-meta { margin-top: 16px; color: var(--mute); font-size: 15px; font-variant-numeric: tabular-nums; }
 .dl-cta { margin-top: 32px; display: flex; flex-direction: column; align-items: center; gap: 14px; }
 .dl-btn {
