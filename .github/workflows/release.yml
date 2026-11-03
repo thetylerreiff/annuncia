@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   release:
-    runs-on: macos-15
+    runs-on: macos-26
     # Holds the signing secrets, shared with Nightly; limit it to main and v* tags.
     environment: release
     steps:
