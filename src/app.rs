@@ -17,7 +17,7 @@ use crate::models::{Download, Transcription};
 use crate::native::{self, OverlayLevel, TopLeftRect, WindowSetup};
 use crate::popout::PopoutSlot;
 use crate::recorder::{self, RecorderEvent, Session, StartRequest, Target, WindowChoice};
-use crate::settings::{CaptureMode, Settings};
+use crate::settings::{CaptureMode, Settings, UpdateChannel};
 use crate::transcriber::Transcriber;
 use crate::transcript::Transcript;
 use crate::tray::{Tray, TrayAction, TrayState};
@@ -26,7 +26,7 @@ use crate::ui::editor::{self, Editor};
 use crate::ui::hud::{self, Hud};
 use crate::ui::launcher::{self, Launcher};
 use crate::ui::library::LibraryView;
-use crate::updater::Updater;
+use crate::updater::{self, Updater};
 
 /// Owns the controller for the life of the app.
 struct AppState {
@@ -197,7 +197,11 @@ impl Annuncia {
             .map(|h| h.apply(&settings.hotkeys))
             .unwrap_or_default();
         let (events_tx, events_rx) = channel();
-        let updater = Updater::start();
+        let updater = Updater::start(
+            settings
+                .update_channel
+                .unwrap_or_else(updater::built_channel),
+        );
 
         cx.spawn(async move |this, cx| {
             loop {
@@ -668,6 +672,11 @@ impl Annuncia {
         if let Err(err) = self.settings.save() {
             self.show_notice(format!("Couldn't save settings: {err:#}"), None, cx);
         }
+        if self.settings.update_channel != before.update_channel
+            && let Some(updater) = &self.updater
+        {
+            updater.set_channel(self.update_channel());
+        }
         let camera_changed = self.settings.camera_device != before.camera_device;
         if camera_changed || self.settings.camera_enabled != before.camera_enabled {
             self.camera_failed = false;
@@ -805,6 +814,13 @@ impl Annuncia {
             let handle = editor::open(state.clone(), path, active, cx);
             state.update(cx, |s, _| s.editor_window = handle);
         });
+    }
+
+    /// The channel picked in Settings, or the one this build came from.
+    pub fn update_channel(&self) -> UpdateChannel {
+        self.settings
+            .update_channel
+            .unwrap_or_else(updater::built_channel)
     }
 
     /// Sparkle's window needs the app in front; a menu bar app usually isn't.

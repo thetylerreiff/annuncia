@@ -20,6 +20,15 @@ pub enum Codec {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum UpdateChannel {
+    /// Tagged releases.
+    Stable,
+    /// Built from main every night it changes.
+    Nightly,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum BubbleSize {
     Small,
     Medium,
@@ -100,6 +109,8 @@ pub struct Settings {
     pub transcription: crate::models::Transcription,
     /// What the editor trims on its own when it opens.
     pub cleanup: crate::cleanup::Cleanup,
+    /// Which builds updates come from; unset means the channel this build came from.
+    pub update_channel: Option<UpdateChannel>,
     pub hotkeys: HotkeySettings,
 }
 
@@ -123,6 +134,7 @@ impl Default for Settings {
             open_editor: true,
             transcription: crate::models::Transcription::Off,
             cleanup: crate::cleanup::Cleanup::Off,
+            update_channel: None,
             hotkeys: HotkeySettings::default(),
         }
     }

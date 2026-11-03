@@ -12,6 +12,16 @@ else
 fi
 
 version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
+# Nightlies (ANNUNCIA_CHANNEL=nightly, with a build number in ANNUNCIA_BUILD) sort after the
+# release they're built on and before the next: 0.2.0 < 0.2.0.57 < 0.2.1.
+channel="${ANNUNCIA_CHANNEL:-stable}"
+bundle_version="$version"
+display_version="$version"
+if [[ "$channel" == nightly ]]; then
+  bundle_version="$version.${ANNUNCIA_BUILD:?nightly builds need ANNUNCIA_BUILD}"
+  display_version="$version nightly ${ANNUNCIA_BUILD}"
+fi
+
 app="target/$profile/Annuncia.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$app/Contents/Frameworks"
@@ -40,14 +50,15 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>CFBundleExecutable</key><string>Annuncia</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
-  <key>CFBundleShortVersionString</key><string>$version</string>
-  <key>CFBundleVersion</key><string>$version</string>
+  <key>CFBundleShortVersionString</key><string>$display_version</string>
+  <key>CFBundleVersion</key><string>$bundle_version</string>
   <key>LSMinimumSystemVersion</key><string>15.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSCameraUsageDescription</key><string>Annuncia shows your camera in a bubble on your recordings.</string>
   <key>NSCameraUseContinuityCameraDeviceType</key><true/>
   <key>NSMicrophoneUsageDescription</key><string>Annuncia records your voiceover.</string>
+  <key>AnnunciaUpdateChannel</key><string>$channel</string>
   <key>SUFeedURL</key><string>https://annuncia.thetylerreiff.co/appcast.xml</string>
   <key>SUPublicEDKey</key><string>ZOkaWi25+g/HEDOZlqbU69ASiOkd6UzdiOrwPYBHDFk=</string>
   <key>SUEnableAutomaticChecks</key><true/>

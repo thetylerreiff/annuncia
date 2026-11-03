@@ -1,0 +1,50 @@
+name: Nightly
+
+# A nightly build of main, when main has changed since the last one. Run it by hand to build now.
+on:
+  schedule:
+    - cron: "0 8 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  changed:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+    steps:
+      - id: check
+        run: |
+          last="$(git ls-remote "https://github.com/$GITHUB_REPOSITORY" refs/tags/nightly | cut -f1)"
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch || "$last" != "$GITHUB_SHA" ]]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  nightly:
+    needs: changed
+    if: needs.changed.outputs.build == 'true'
+    runs-on: macos-15
+    environment: release
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: scripts/ci-signing.sh
+        env:
+          DEVELOPER_ID_P12: ${{ secrets.DEVELOPER_ID_P12 }}
+          DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+          NOTARY_KEY: ${{ secrets.NOTARY_KEY }}
+          SPARKLE_KEY: ${{ secrets.SPARKLE_KEY }}
+      - run: scripts/release.sh nightly
+        env:
+          ANNUNCIA_BUILD: ${{ github.run_number }}
+          GH_TOKEN: ${{ github.token }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER: ${{ secrets.NOTARY_ISSUER }}

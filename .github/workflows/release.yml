@@ -15,7 +15,7 @@ permissions:
 jobs:
   release:
     runs-on: macos-15
-    # Holds the signing secrets; set it to need your approval before a run can use them.
+    # Holds the signing secrets, shared with Nightly; limit it to main and v* tags.
     environment: release
     steps:
       - uses: actions/checkout@v7

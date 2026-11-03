@@ -9,7 +9,7 @@ use crate::app::{self, Annuncia};
 use crate::cleanup::Cleanup;
 use crate::hotkeys::{HotkeyAction, display_binding, keystroke_to_binding};
 use crate::models::Transcription;
-use crate::settings::{self, BubbleSize, Codec, Settings, tilde};
+use crate::settings::{self, BubbleSize, Codec, Settings, UpdateChannel, tilde};
 use crate::ui::icons::icon;
 use crate::ui::{Theme, button, segmented, toggle};
 
@@ -201,6 +201,7 @@ impl Render for SettingsView {
                 theme,
             ))
             .children(self.updates_row(theme, cx))
+            .children(self.channel_row(theme, cx))
             .child(row(
                 "Settings file",
                 Some(tilde(&settings::settings_path())),
@@ -507,7 +508,7 @@ fn about(theme: Theme) -> AnyElement {
                         .text_color(theme.text_muted)
                         .child(format!(
                             "Version {} · MIT License",
-                            env!("CARGO_PKG_VERSION")
+                            crate::updater::display_version()
                         )),
                 ),
         )
@@ -544,6 +545,31 @@ impl SettingsView {
                 "Install updates automatically",
                 Some("Checks once a day and installs when you quit Annuncia".into()),
                 control,
+                theme,
+            )
+            .into_any_element(),
+        )
+    }
+
+    /// Stable or Nightly, when there's an updater to switch.
+    fn channel_row(&self, theme: Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let state = self.state.read(cx);
+        state.updater.as_ref()?;
+        let nightly = state.update_channel() == UpdateChannel::Nightly;
+        Some(
+            row(
+                "Update channel",
+                Some("Nightly is built from main every night it changes".into()),
+                self.choice(
+                    "channel",
+                    &["Stable", "Nightly"],
+                    usize::from(nightly),
+                    theme,
+                    cx,
+                    |s, i| {
+                        s.update_channel = Some([UpdateChannel::Stable, UpdateChannel::Nightly][i])
+                    },
+                ),
                 theme,
             )
             .into_any_element(),

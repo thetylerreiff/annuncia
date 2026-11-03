@@ -32,7 +32,7 @@ The name comes from the Annunciation, where the archangel Gabriel delivers a mes
 - **Transcripts on your Mac.** Turn on transcription and every recording is transcribed locally, in a second or two, by a speech model running on your Mac's GPU. **Copy transcript** puts it on the clipboard as Markdown, in timestamped paragraphs. Nothing is uploaded.
 - **One click to share.** When you stop, the notch drops down with Copy (the file itself, ready to paste into Slack, Mail or Messages), Copy transcript, Edit and Open.
 - **Black glass.** Every window shares the notch's black (Liquid Glass under the recorder panel on macOS 26 and later), with blue marking only what's switched on, and a dithered icon to match.
-- **Updates itself.** Checks for a new version once a day and installs it when you quit. Turn it off in Settings, or check by hand from the menu bar icon.
+- **Updates itself.** Checks for a new version once a day and installs it when you quit. Choose Stable releases or Nightly builds of `main` in Settings, turn updates off there, or check by hand from the menu bar icon.
 - **Plain files.** MP4 (H.264 or HEVC) in a folder you choose, with settings in a JSON file you can edit by hand.
 
 ## Requirements
@@ -86,6 +86,8 @@ The Release workflow then runs `scripts/release.sh`, which builds and signs the 
 | `DEVELOPER_ID_P12`, `DEVELOPER_ID_P12_PASSWORD` | The Developer ID Application certificate and private key, exported as a `.p12` and base64-encoded |
 | `NOTARY_KEY`, `NOTARY_KEY_ID`, `NOTARY_ISSUER` | An App Store Connect API key (the `.p8` file's contents, its key ID and the issuer ID) |
 | `SPARKLE_KEY` | The Sparkle signing key, exported with `generate_keys --account annuncia -x` |
+
+The Nightly workflow builds `main` every night it has changed (or whenever you run it by hand) with `scripts/release.sh nightly`. A nightly is versioned after the release it's built on, such as `0.2.0.57`, and replaces the last one on the rolling [`nightly` prerelease](https://github.com/thetylerreiff/annuncia/releases/tag/nightly), which also holds the nightly feed. Both workflows use the `release` environment, so limit it to `main` and `v*` tags.
 
 `release.sh` also runs on a Mac from the tagged commit, with the same credentials from the login keychain and a notary profile saved as `annuncia`.
 
