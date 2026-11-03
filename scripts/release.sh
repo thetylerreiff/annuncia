@@ -68,13 +68,16 @@ out="target/release/dist"
 rm -rf "$out"
 mkdir -p "$out"
 # Nightly zips are named by version: the feed and the zip upload separately, and an old feed
-# must never point at a new zip it has no signature for.
+# must never point at a new zip it has no signature for. Stable names stay fixed, so the
+# website's releases/latest/download/Annuncia.dmg link always finds the newest.
 if [[ "$channel" == nightly ]]; then
-  name="Annuncia-$bundle_version.zip"
+  base="Annuncia-$bundle_version"
 else
-  name="Annuncia.zip"
+  base="Annuncia"
 fi
+name="$base.zip"
 zip="$out/$name"
+dmg="$out/$base.dmg"
 
 # Notarize, then staple the ticket so Gatekeeper accepts the app offline, and zip it again.
 ditto -c -k --keepParent "$app" "$zip"
@@ -82,6 +85,11 @@ xcrun notarytool submit "$zip" "${notary[@]}" --wait
 xcrun stapler staple "$app"
 rm "$zip"
 ditto -c -k --keepParent "$app" "$zip"
+
+# The disk image the website offers, notarized and stapled on its own so it opens offline too.
+ANNUNCIA_SIGN_IDENTITY="$identity" scripts/dmg.sh "$app" "$dmg" >/dev/null
+xcrun notarytool submit "$dmg" "${notary[@]}" --wait
+xcrun stapler staple "$dmg"
 
 # The feed entry: Sparkle checks the EdDSA signature against SUPublicEDKey before installing.
 signature="$("$(scripts/sparkle.sh)/bin/sign_update" "${sparkle_key[@]}" "$zip")"
@@ -105,7 +113,7 @@ if [[ "$channel" == nightly ]]; then
   else
     gh release create nightly --repo "$repo" --prerelease --title "Annuncia Nightly" --notes "$notes"
   fi
-  gh release upload nightly "$zip" --repo "$repo" --clobber
+  gh release upload nightly "$zip" "$dmg" --repo "$repo" --clobber
   cat > "$out/appcast.xml" <<XML
 <?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
@@ -117,15 +125,15 @@ $item
 XML
   gh release upload nightly "$out/appcast.xml" --repo "$repo" --clobber
   for old in $(gh release view nightly --repo "$repo" --json assets \
-    --jq '.assets[].name | select(startswith("Annuncia-") and endswith(".zip"))'); do
-    [[ "$old" == "$name" ]] || gh release delete-asset nightly "$old" --repo "$repo" --yes
+    --jq '.assets[].name | select(startswith("Annuncia-"))'); do
+    [[ "$old" == "$base".* ]] || gh release delete-asset nightly "$old" --repo "$repo" --yes
   done
   echo "Released nightly $bundle_version"
   exit 0
 fi
 
 # The download has to exist before the feed points at it.
-gh release create "$tag" "$zip" --repo "$repo" --title "Annuncia $version" --generate-notes --verify-tag
+gh release create "$tag" "$zip" "$dmg" --repo "$repo" --title "Annuncia $version" --generate-notes --verify-tag
 
 # The tag may be behind main by now, so the feed entry goes on main's tip, newest first. That
 # happens on a detached checkout, leaving any local branch alone.

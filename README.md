@@ -79,7 +79,7 @@ To release, bump the version in `Cargo.toml`, commit, and push a matching tag:
 git tag v0.2.0 && git push origin v0.2.0
 ```
 
-The Release workflow then runs `scripts/release.sh`, which builds and signs the app with a Developer ID certificate, notarizes it, uploads it to a GitHub release and adds it to the update feed, `site/public/appcast.xml`, on `main`. Installed copies pick it up once the site deploys. The workflow takes its credentials from the `release` environment's secrets:
+The Release workflow then runs `scripts/release.sh`, which builds and signs the app with a Developer ID certificate, notarizes it and a disk image for the website (`scripts/dmg.sh`, laid out on the background in `assets/dmg`), uploads both to a GitHub release and adds it to the update feed, `site/public/appcast.xml`, on `main`. Installed copies pick it up once the site deploys. The workflow takes its credentials from the `release` environment's secrets:
 
 | Secret | What it is |
 | --- | --- |

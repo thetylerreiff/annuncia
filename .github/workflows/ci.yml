@@ -25,3 +25,4 @@ jobs:
       - run: cargo clippy --release -- -D warnings
       # Builds the bundle with Sparkle inside, signed ad hoc: no secrets here, so forks can run it.
       - run: scripts/bundle.sh
+      - run: scripts/dmg.sh target/release/Annuncia.app target/release/Annuncia.dmg
