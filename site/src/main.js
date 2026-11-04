@@ -898,7 +898,7 @@ $$('.dpa[data-say]').forEach((b) => b.addEventListener('click', () => {
     const a = .1 + .9 * env * n;
     return s.k === 'fill' ? a * .6 : a;
   }
-  const FONT = '"Instrument Sans", system-ui, sans-serif';
+  const FONT = '"Schibsted Grotesk", system-ui, sans-serif';
   function draw() {
     if (!W) return;
     const rulerH = 26, top = 16, waveH = H - rulerH - top - 6, mid = top + waveH / 2, scale = W / TOTAL;

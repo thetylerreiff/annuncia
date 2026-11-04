@@ -10,7 +10,7 @@
   --line: rgba(255, 255, 255, .08);
   --blue: #3d3dff;
   --gut: clamp(16px, 4vw, 48px);
-  --font: "Instrument Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font: "Schibsted Grotesk", ui-sans-serif, system-ui, -apple-system, sans-serif;
   color-scheme: dark;
 }
 

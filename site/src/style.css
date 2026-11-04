@@ -19,7 +19,7 @@
   --r: 10px;
   --ease: cubic-bezier(.2, .8, .2, 1);
   --face: url("/images/gabriel.png") 51% 30% / 330% auto no-repeat, #0d0d24;
-  --font: "Instrument Sans", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font: "Schibsted Grotesk", ui-sans-serif, system-ui, -apple-system, sans-serif;
   color-scheme: dark;
 }
 
@@ -35,7 +35,6 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   overflow-x: clip;
-  font-feature-settings: "ss01";
 }
 a { color: inherit; text-decoration: none; }
 button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
@@ -194,7 +193,7 @@ body.in-body .nav nav { background: rgba(0, 0, 0, .55); }
 .def-p { color: var(--silver); }
 .ov-cta { display: flex; gap: 10px; }
 .wordmark {
-  font-family: var(--display); font-feature-settings: normal;
+  font-family: var(--display);
   font-size: 22vw; /* refined by JS to fit the line exactly */
   font-weight: 400;
   line-height: .74; letter-spacing: -.035em;
@@ -211,7 +210,7 @@ body.in-body .nav nav { background: rgba(0, 0, 0, .55); }
   text-align: center; padding: 80px var(--gut) 40px; pointer-events: none;
   opacity: var(--sp);
 }
-.st-line { font-family: var(--display); font-feature-settings: normal; font-size: clamp(44px, 7.4vw, 116px); line-height: .96; letter-spacing: -.025em; font-weight: 400; }
+.st-line { font-family: var(--display); font-size: clamp(44px, 7.4vw, 116px); line-height: .96; letter-spacing: -.025em; font-weight: 400; }
 .st-a { transform: translateY(calc((1 - var(--sp)) * 40px)); }
 .st-b { color: rgba(212, 212, 242, .42); transform: translateY(calc((1 - var(--sp)) * 70px)); }
 .st-sub { margin-top: clamp(28px, 3.4vw, 44px); max-width: 520px; font-size: clamp(16px, 1.3vw, 18px); color: var(--soft); line-height: 1.55; text-wrap: balance; transform: translateY(calc((1 - var(--sp)) * 90px)); }
@@ -230,7 +229,7 @@ body.in-body .nav nav { background: rgba(0, 0, 0, .55); }
 /* ---------- Shared section type ---------- */
 .sec { position: relative; padding: clamp(110px, 13vw, 200px) 0; }
 .kicker { font-size: 15px; font-weight: 600; color: var(--mute); letter-spacing: -.005em; margin-bottom: 20px; display: flex; align-items: center; gap: 10px; }
-h2 { font-family: var(--display); font-feature-settings: normal; font-size: clamp(42px, 6.2vw, 92px); line-height: .96; letter-spacing: -.025em; font-weight: 400; text-wrap: balance; }
+h2 { font-family: var(--display); font-size: clamp(42px, 6.2vw, 92px); line-height: .96; letter-spacing: -.025em; font-weight: 400; text-wrap: balance; }
 h3 { font-size: clamp(22px, 1.9vw, 27px); line-height: 1.12; letter-spacing: -.03em; font-weight: 600; }
 .body { font-size: clamp(16px, 1.25vw, 18.5px); line-height: 1.55; color: var(--soft); letter-spacing: -.008em; text-wrap: pretty; }
 .body.muted { color: var(--mute); }
