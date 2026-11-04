@@ -1,6 +1,11 @@
 /* The 404 page, on the policy pages' shell (legal.css): the notch stopped at 4:04 over the
    art, playing back like a tape that lost its tracking. */
 
+/* Imported here, not linked from the page, so the build keeps this order; it puts a page's own
+   stylesheet first when the shared ones are linked beside it. */
+@import "./legal.css";
+@import "./download.css";
+
 .nf-body { min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; }
 
 /* The notch, paused: a hollow red dot and the time it stopped at. */

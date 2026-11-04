@@ -1,8 +1,13 @@
 /* Why Annuncia, on the policy pages' shell (legal.css): the reasons, a comparison table, and
    when something else fits better. */
 
+/* Imported here, not linked from the page, so the build keeps this order; it puts a page's own
+   stylesheet first when the shared ones are linked beside it. */
+@import "./legal.css";
+@import "./download.css";
+
 .why-head > * { max-width: 1240px; }
-.why-head .summary { max-width: 720px; margin: 22px 0 0; padding: 0; color: var(--soft); }
+.why-head .summary { max-width: 720px; margin: 22px 0 0 max(0px, calc((100% - 1240px) / 2)); padding: 0; color: var(--soft); }
 
 .why { max-width: 1240px; margin: 0 auto; padding: 0 var(--gut); box-sizing: content-box; }
 .why section { padding: clamp(40px, 6vw, 64px) 0; border-top: 1px solid var(--line); }
