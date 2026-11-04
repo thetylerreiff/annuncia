@@ -1,0 +1,51 @@
+/* The 404 page, on the policy pages' shell (legal.css): the notch stopped at 4:04 over the
+   art, playing back like a tape that lost its tracking. */
+
+.nf-body { min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; }
+
+/* The notch, paused: a hollow red dot and the time it stopped at. */
+.nf-notch {
+  position: fixed; top: 0; left: 50%; z-index: 10; transform: translateX(-50%);
+  display: flex; height: 34px; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums;
+  filter: drop-shadow(0 1px 0 rgba(255, 255, 255, .13)) drop-shadow(0 10px 24px rgba(0, 0, 0, .6));
+}
+.nf-notch::before, .nf-notch::after { content: ""; position: absolute; top: 0; width: 10px; height: 10px; }
+.nf-notch::before { left: -10px; background: radial-gradient(circle at 0 100%, transparent 9.5px, #000 10px); }
+.nf-notch::after { right: -10px; background: radial-gradient(circle at 100% 100%, transparent 9.5px, #000 10px); }
+.nf-cam { width: 150px; background: #000; }
+.nf-wing { width: 72px; background: #000; display: flex; align-items: center; gap: 8px; }
+.nf-wl { border-radius: 0 0 0 16px; justify-content: flex-end; }
+.nf-wr { border-radius: 0 0 16px 0; padding-left: 4px; }
+.nf-dot { width: 9px; height: 9px; border-radius: 50%; box-shadow: inset 0 0 0 1.6px #ff453a; flex: none; }
+.nf-time { color: #fff; animation: nf-blink 1.2s steps(1) infinite; }
+.nf-tag { color: var(--mute); font-weight: 500; }
+@keyframes nf-blink { 50% { opacity: .25; } }
+
+/* The art fills the page behind the words and fades out at the edges. */
+.nf { position: relative; flex: 1; display: grid; place-items: center; padding: clamp(64px, 10vw, 120px) var(--gut); overflow: hidden; }
+.nf-art {
+  position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: 50% 30%;
+  image-rendering: pixelated; opacity: .5;
+  mask-image: radial-gradient(ellipse 70% 70% at 50% 45%, #000 30%, transparent 100%);
+  -webkit-mask-image: radial-gradient(ellipse 70% 70% at 50% 45%, #000 30%, transparent 100%);
+}
+.nf::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: radial-gradient(ellipse 50% 45% at 50% 55%, rgba(0, 0, 0, .75), transparent 100%); }
+
+.nf-copy { position: relative; z-index: 1; max-width: 640px; text-align: center; }
+.nf-code { color: #8c8cff; font-size: 15px; font-weight: 600; letter-spacing: .02em; font-variant-numeric: tabular-nums; }
+.nf-copy h1 { margin-top: 14px; text-wrap: balance; }
+.nf-lede { margin: 20px auto 0; max-width: 460px; color: var(--soft); font-size: clamp(17px, 1.6vw, 19px); line-height: 1.55; text-wrap: pretty; }
+.nf-actions { margin-top: 36px; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 14px 24px; }
+.nf-alt { font-size: 16px; font-weight: 500; text-decoration: underline; text-decoration-color: rgba(242, 242, 245, .35); text-underline-offset: 4px; }
+.nf-alt:hover { color: #fff; text-decoration-color: var(--blue); }
+
+.nf-body .foot { position: relative; z-index: 1; background: #000; }
+
+@media (max-width: 640px) {
+  .nf-cam { width: 110px; }
+  .nf-wing { width: 62px; }
+  .nf-notch { height: 30px; font-size: 12.5px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .nf-time { animation: none; }
+}
