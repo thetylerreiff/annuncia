@@ -298,24 +298,41 @@ impl Render for SettingsView {
                 theme,
             ))
             .child(row(
-                "Avatar when camera is off",
-                Some(avatar_label.clone().unwrap_or_else(|| "None".into())),
-                div()
-                    .flex()
-                    .gap(px(6.))
-                    .child(
-                        button("choose-avatar", "Choose…", false, theme)
-                            .on_click(cx.listener(|this, _, _, cx| this.choose_avatar(cx))),
-                    )
-                    .when(avatar_label.is_some(), |d| {
-                        d.child(button("clear-avatar", "Clear", false, theme).on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.update(cx, |s| s.avatar_image = None)
-                            }),
-                        ))
-                    }),
+                "Avatar when the camera is off",
+                Some(
+                    "Marbled ink that moves with your voice, or a photo. Off hides the bubble"
+                        .into(),
+                ),
+                self.switch("avatar", settings.avatar_enabled, theme, cx, |s| {
+                    s.avatar_enabled = !s.avatar_enabled
+                }),
                 theme,
-            ));
+            ))
+            .children(settings.avatar_enabled.then(|| {
+                row(
+                    "Avatar photo",
+                    Some(
+                        avatar_label
+                            .clone()
+                            .unwrap_or_else(|| "None, so the marbled ink shows".into()),
+                    ),
+                    div()
+                        .flex()
+                        .gap(px(6.))
+                        .child(
+                            button("choose-avatar", "Choose…", false, theme)
+                                .on_click(cx.listener(|this, _, _, cx| this.choose_avatar(cx))),
+                        )
+                        .when(avatar_label.is_some(), |d| {
+                            d.child(button("clear-avatar", "Clear", false, theme).on_click(
+                                cx.listener(|this, _, _, cx| {
+                                    this.update(cx, |s| s.avatar_image = None)
+                                }),
+                            ))
+                        }),
+                    theme,
+                )
+            }));
 
         let mut shortcuts = section(theme);
         for action in HotkeyAction::ALL {

@@ -24,7 +24,7 @@ The name comes from the Annunciation, where the archangel Gabriel delivers a mes
 - **Lives in the menu bar.** Click the icon for the recorder panel, right-click for quick actions. No Dock icon.
 - **Full screen or one window.** Window recordings are cropped to that window. They still include your camera bubble, but not the rest of the desktop.
 - **Voiceover and system audio.** Records your microphone, and optionally the sound your Mac is playing.
-- **Camera bubble.** A round, mirrored camera overlay you can drag anywhere and hide with a hover button. When the camera is off it shows an avatar image instead. It comes in three sizes, and can let your head pop out over its top edge.
+- **Camera bubble.** A round, mirrored camera overlay you can drag anywhere and hide with a hover button. When the camera is off it shows an avatar instead: marbled ink in the icon's colors that drifts on its own and pulses with each syllable while you talk, or a photo you choose. Turn the avatar off in Settings, or hide the bubble from its hover button, and there's no bubble at all. It comes in three sizes, and can let your head pop out over its top edge.
 - **Controls around the notch.** While recording, a slim black strip extends the MacBook notch: timer on the left, pause and stop on the right, with restart and discard a hover away. On displays without a notch it's a small capsule under the menu bar. Annuncia's own controls never appear in the video.
 - **Global shortcuts.** Start, stop, cancel and toggle the camera from anywhere. Rebind them in Settings.
 - **Automatic clean up.** One click (or a setting) trims dead air, shortens long pauses and cuts filler words, as cuts you can see and undo.

@@ -101,6 +101,9 @@ pub struct Settings {
     pub bubble_size: BubbleSize,
     /// Shown in the bubble when the camera is off.
     pub avatar_image: Option<PathBuf>,
+    /// With the camera off, show the avatar (that photo, or smoke that moves with your voice)
+    /// rather than no bubble at all.
+    pub avatar_enabled: bool,
     /// Let your head rise out of the top of the camera bubble.
     pub bubble_popout: bool,
     /// Open the trim-and-slice editor when a recording is saved.
@@ -130,6 +133,7 @@ impl Default for Settings {
             countdown_secs: 3,
             bubble_size: BubbleSize::Medium,
             avatar_image: None,
+            avatar_enabled: true,
             bubble_popout: false,
             open_editor: true,
             transcription: crate::models::Transcription::Off,

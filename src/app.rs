@@ -13,6 +13,7 @@ use gpui::{
 use crate::camera::{self, Camera, CameraDevice, FrameSlot};
 use crate::hotkeys::{HotkeyAction, Hotkeys};
 use crate::library::Library;
+use crate::mic_level::MicLevel;
 use crate::models::{Download, Transcription};
 use crate::native::{self, OverlayLevel, TopLeftRect, WindowSetup};
 use crate::popout::PopoutSlot;
@@ -128,6 +129,8 @@ pub struct Annuncia {
     download_shown: u32,
     transcriber: Transcriber,
     camera: Option<Camera>,
+    /// The microphone's level for the animated avatar, while recording with it showing.
+    pub mic_level: Option<MicLevel>,
     /// Taken out while a pause or resume runs on a worker thread.
     session: Option<Session>,
     /// Stop, discard or restart asked for while a pause or resume was still running.
@@ -239,6 +242,7 @@ impl Annuncia {
             download_shown: 0,
             transcriber: Transcriber::new(),
             camera: None,
+            mic_level: None,
             session: None,
             pending_finish: None,
             events_tx,
@@ -1153,7 +1157,7 @@ impl Annuncia {
             );
         showing
             && !self.bubble_dismissed
-            && (self.settings.camera_enabled || self.settings.avatar_image.is_some())
+            && (self.settings.camera_enabled || self.settings.avatar_enabled)
     }
 
     /// Reconciles the HUD, bubble window and camera session with the current state.
@@ -1169,6 +1173,19 @@ impl Annuncia {
             self.start_camera(cx);
         } else if !wants_camera && self.camera.is_some() {
             self.camera = None;
+        }
+
+        // The animated avatar moves with your voice, but only while recording: metering opens
+        // the microphone, and the recording already has it open then.
+        let wants_meter = self.wants_bubble()
+            && !self.settings.camera_enabled
+            && self.settings.avatar_image.is_none()
+            && self.settings.mic_enabled
+            && matches!(self.phase, Phase::Recording { .. });
+        if wants_meter && self.mic_level.is_none() {
+            self.mic_level = MicLevel::start(self.settings.mic_device.as_deref());
+        } else if !wants_meter {
+            self.mic_level = None;
         }
 
         let wants_hud = !matches!(self.phase, Phase::Idle) || self.notice.is_some();
