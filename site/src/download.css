@@ -9,7 +9,7 @@
 }
 .dl-head > * { position: relative; }
 .dl-icon { display: block; width: clamp(96px, 11vw, 128px); height: auto; margin: 0 auto 28px; filter: drop-shadow(0 22px 44px rgba(61, 61, 255, .4)); }
-.dl-head h1 { font-size: clamp(48px, 7vw, 84px); line-height: .95; letter-spacing: -.055em; font-weight: 600; }
+.dl-head h1 { font-size: clamp(48px, 7vw, 84px); }
 .dl-meta { margin-top: 16px; color: var(--mute); font-size: 15px; font-variant-numeric: tabular-nums; }
 .dl-cta { margin-top: 32px; display: flex; flex-direction: column; align-items: center; gap: 14px; }
 .dl-btn {

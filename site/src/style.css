@@ -1,5 +1,7 @@
 /* Annuncia, direction D: the Annunciation goes into the notch. */
 
+@import "./display.css";
+
 :root {
   --ink: #0d0d24;
   --silver: #d4d4f2;
@@ -192,9 +194,10 @@ body.in-body .nav nav { background: rgba(0, 0, 0, .55); }
 .def-p { color: var(--silver); }
 .ov-cta { display: flex; gap: 10px; }
 .wordmark {
+  font-family: var(--display); font-feature-settings: normal;
   font-size: 22vw; /* refined by JS to fit the line exactly */
-  font-weight: 600; font-stretch: 100%;
-  line-height: .74; letter-spacing: -.068em;
+  font-weight: 400;
+  line-height: .74; letter-spacing: -.035em;
   color: var(--silver);
   margin-left: -.045em; white-space: nowrap;
   padding-top: .04em;
@@ -208,7 +211,7 @@ body.in-body .nav nav { background: rgba(0, 0, 0, .55); }
   text-align: center; padding: 80px var(--gut) 40px; pointer-events: none;
   opacity: var(--sp);
 }
-.st-line { font-size: clamp(44px, 7.4vw, 116px); line-height: .96; letter-spacing: -.055em; font-weight: 600; }
+.st-line { font-family: var(--display); font-feature-settings: normal; font-size: clamp(44px, 7.4vw, 116px); line-height: .96; letter-spacing: -.025em; font-weight: 400; }
 .st-a { transform: translateY(calc((1 - var(--sp)) * 40px)); }
 .st-b { color: rgba(212, 212, 242, .42); transform: translateY(calc((1 - var(--sp)) * 70px)); }
 .st-sub { margin-top: clamp(28px, 3.4vw, 44px); max-width: 520px; font-size: clamp(16px, 1.3vw, 18px); color: var(--soft); line-height: 1.55; text-wrap: balance; transform: translateY(calc((1 - var(--sp)) * 90px)); }
@@ -227,7 +230,7 @@ body.in-body .nav nav { background: rgba(0, 0, 0, .55); }
 /* ---------- Shared section type ---------- */
 .sec { position: relative; padding: clamp(110px, 13vw, 200px) 0; }
 .kicker { font-size: 15px; font-weight: 600; color: var(--mute); letter-spacing: -.005em; margin-bottom: 20px; display: flex; align-items: center; gap: 10px; }
-h2 { font-size: clamp(42px, 6.2vw, 92px); line-height: .96; letter-spacing: -.052em; font-weight: 600; text-wrap: balance; }
+h2 { font-family: var(--display); font-feature-settings: normal; font-size: clamp(42px, 6.2vw, 92px); line-height: .96; letter-spacing: -.025em; font-weight: 400; text-wrap: balance; }
 h3 { font-size: clamp(22px, 1.9vw, 27px); line-height: 1.12; letter-spacing: -.03em; font-weight: 600; }
 .body { font-size: clamp(16px, 1.25vw, 18.5px); line-height: 1.55; color: var(--soft); letter-spacing: -.008em; text-wrap: pretty; }
 .body.muted { color: var(--mute); }
@@ -626,7 +629,7 @@ h3 + .body { margin-top: 12px; }
 }
 
 /* ---------- Local + open source ---------- */
-.big-statement { font-size: clamp(52px, 10.4vw, 168px); line-height: .9; letter-spacing: -.062em; font-weight: 600; }
+.big-statement { font-size: clamp(52px, 10.4vw, 168px); line-height: .9; }
 .big-statement span { display: block; }
 .big-statement span + span { color: rgba(212, 212, 242, .42); }
 .local-grid { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: clamp(36px, 5vw, 80px); margin-top: clamp(56px, 6vw, 96px); align-items: start; }

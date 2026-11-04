@@ -1,0 +1,7 @@
+/* Display face for big headings: Geist Serif (OFL, from Vercel's `geist` package). Regular weight only. */
+@font-face {
+  font-family: "Geist Serif";
+  src: url("/fonts/GeistSerif-Regular.woff2") format("woff2");
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+:root { --display: "Geist Serif", "Times New Roman", serif; }

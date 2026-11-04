@@ -6,7 +6,7 @@
 
 .why { max-width: 1240px; margin: 0 auto; padding: 0 var(--gut); box-sizing: content-box; }
 .why section { padding: clamp(40px, 6vw, 64px) 0; border-top: 1px solid var(--line); }
-.why h2 { font-size: clamp(26px, 3vw, 34px); line-height: 1.1; letter-spacing: -.035em; font-weight: 600; max-width: 720px; text-wrap: balance; }
+.why h2 { font-family: var(--display); font-size: clamp(26px, 3vw, 34px); line-height: 1.1; letter-spacing: -.015em; font-weight: 400; max-width: 720px; text-wrap: balance; }
 .why .lede { margin-top: 12px; max-width: 720px; color: var(--soft); font-size: 17px; line-height: 1.6; text-wrap: pretty; }
 .why a { text-decoration: underline; text-decoration-color: rgba(242, 242, 245, .35); text-underline-offset: 3px; }
 .why a:hover { color: #fff; text-decoration-color: var(--blue); }
@@ -45,7 +45,7 @@
 .other p { margin-top: 8px; color: var(--soft); font-size: 15.5px; line-height: 1.6; text-wrap: pretty; }
 
 .sources { color: var(--mute); font-size: 14px; line-height: 1.6; }
-.sources h2 { font-size: 17px; letter-spacing: -.015em; color: var(--text); }
+.sources h2 { font-family: var(--font); font-weight: 600; font-size: 17px; letter-spacing: -.015em; color: var(--text); }
 .sources p { margin-top: 10px; max-width: 720px; }
 .sources ul { margin-top: 12px; padding-left: 1.1em; columns: 2; column-gap: 40px; }
 .sources li { margin-top: 4px; break-inside: avoid; }
