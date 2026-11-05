@@ -18,6 +18,8 @@ icons!(
     "chevron-left",
     "chevron-right",
     "display",
+    "ear-left",
+    "ear-right",
     "folder",
     "gear",
     "library",
@@ -31,6 +33,7 @@ icons!(
     "speaker",
     "transcript",
     "window",
+    "x",
 );
 
 /// Raster art served to GPUI's `img()`: the app icon and the Settings sidebar texture.

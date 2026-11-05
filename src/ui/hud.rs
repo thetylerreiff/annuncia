@@ -4,10 +4,10 @@
 use std::time::{Duration, Instant};
 
 use gpui::{
-    Animation, AnimationExt as _, AnyElement, App, AppContext as _, Context, Div, Entity,
-    FontWeight, Hsla, InteractiveElement as _, IntoElement, ParentElement as _, Render,
+    Animation, AnimationExt as _, AnyElement, App, AppContext as _, BoxShadow, Context, Div,
+    Entity, FontWeight, Hsla, InteractiveElement as _, IntoElement, ParentElement as _, Render,
     SharedString, StatefulInteractiveElement as _, Styled as _, Window, WindowHandle, div, hsla,
-    prelude::FluentBuilder as _, pulsating_between, px, rgb,
+    point, prelude::FluentBuilder as _, pulsating_between, px, rgb,
 };
 
 use crate::app::{self, Annuncia, End, Phase, TranscriptState};
@@ -16,13 +16,18 @@ use crate::models::Transcription;
 use crate::native::{self, MenuBarGeometry, OverlayLevel, TopLeftRect};
 use crate::ui::icons::icon;
 
-/// Each side of the notch: just enough for the timer on the left and two buttons on the right.
-const WING: f64 = 72.;
+/// Each side of the notch: the timer on the left, pause and stop on the right.
+const WING: f64 = 84.;
+/// While the pointer is over a recording's HUD, each side widens for Restart and Discard.
+const WING_EXPANDED: f64 = 116.;
+/// The inverted corners where the island meets the top edge of the screen.
+const EAR: f64 = 10.;
 const CAPSULE_WIDTH: f64 = 168.;
+const CAPSULE_EXPANDED: f64 = 232.;
 const CAPSULE_HEIGHT: f64 = 30.;
+const BUTTON: f32 = 24.;
+const RECORD: u32 = 0xff453a;
 const SAVED_DRAWER: f64 = 38.;
-/// Restart and Discard, shown while the pointer is over a recording's HUD.
-const CONTROLS_DRAWER: f64 = 36.;
 const NOTICE_DRAWER: f64 = 72.;
 const DRAWER_WIDTH: f64 = 370.;
 
@@ -48,7 +53,7 @@ pub fn format_elapsed(secs: u64) -> String {
 
 pub fn open(state: Entity<Annuncia>, cx: &mut App) -> Option<WindowHandle<Hud>> {
     let geometry = native::menu_bar_geometry()?;
-    let rect = frame_for(&geometry, 0., 0.);
+    let rect = frame_for(&geometry, 0., 0., false);
     cx.open_window(app::overlay_options(rect, false), |window, cx| {
         native::setup_window(
             window,
@@ -72,10 +77,12 @@ pub fn open(state: Entity<Annuncia>, cx: &mut App) -> Option<WindowHandle<Hud>> 
 }
 
 /// `min_width` makes room for a drawer wider than the bar (the saved file's three buttons).
-fn frame_for(g: &MenuBarGeometry, drawer: f64, min_width: f64) -> TopLeftRect {
+/// `expanded` widens the bar for a recording's hover controls.
+fn frame_for(g: &MenuBarGeometry, drawer: f64, min_width: f64, expanded: bool) -> TopLeftRect {
     match g.notch {
         Some(notch) => {
-            let w = (notch.w + 2. * WING).max(min_width);
+            let wing = if expanded { WING_EXPANDED } else { WING };
+            let w = (notch.w + 2. * wing).max(min_width) + 2. * EAR;
             TopLeftRect {
                 x: notch.x + notch.w / 2. - w / 2.,
                 y: notch.y,
@@ -84,7 +91,12 @@ fn frame_for(g: &MenuBarGeometry, drawer: f64, min_width: f64) -> TopLeftRect {
             }
         }
         None => {
-            let w = CAPSULE_WIDTH.max(min_width);
+            let capsule = if expanded {
+                CAPSULE_EXPANDED
+            } else {
+                CAPSULE_WIDTH
+            };
+            let w = capsule.max(min_width);
             TopLeftRect {
                 x: g.screen.x + (g.screen.w - w) / 2.,
                 y: g.screen.y + g.menu_bar_height + 6.,
@@ -103,28 +115,28 @@ impl Render for Hud {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let state = self.state.read(cx);
         let recording = matches!(state.phase, Phase::Recording { .. });
+        let expanded = recording && self.hovered;
         let (drawer_height, min_width) = if state.notice.is_some() {
             (NOTICE_DRAWER, DRAWER_WIDTH)
         } else if matches!(state.phase, Phase::Saved { .. }) {
             (SAVED_DRAWER, DRAWER_WIDTH)
-        } else if recording && self.hovered {
-            (CONTROLS_DRAWER, 0.)
         } else {
             (0., 0.)
         };
         if !recording {
             self.confirm_restart_until = None;
         }
-        let rect = frame_for(&self.geometry, drawer_height, min_width);
+        let rect = frame_for(&self.geometry, drawer_height, min_width, expanded);
         if self.applied != Some(rect) {
             self.applied = Some(rect);
             native::set_frame(window, cx, rect);
         }
 
-        let (left, right) = self.wings(cx);
+        let (left, right) = self.wings(expanded, cx);
         let notch = self.geometry.notch;
         let bar_height = px(notch.map_or(CAPSULE_HEIGHT, |n| n.h) as f32);
 
+        // Around a notch the controls hug the camera housing; in a capsule they sit at the ends.
         let bar = div()
             .h(bar_height)
             .w_full()
@@ -136,8 +148,10 @@ impl Render for Hud {
                     .h_full()
                     .flex()
                     .items_center()
-                    .pl(px(10.))
-                    .gap(px(6.))
+                    .map(|d| match notch {
+                        Some(_) => d.justify_end().pr(px(2.)),
+                        None => d.pl(px(10.)),
+                    })
                     .child(left),
             )
             .when_some(notch, |d, n| d.child(div().w(px(n.w as f32)).h_full()))
@@ -147,26 +161,34 @@ impl Render for Hud {
                     .h_full()
                     .flex()
                     .items_center()
-                    .justify_end()
-                    .pr(px(6.))
-                    .gap(px(2.))
+                    .map(|d| match notch {
+                        Some(_) => d.pl(px(4.)),
+                        None => d.justify_end().pr(px(4.)),
+                    })
                     .child(right),
             );
 
         let drawer = (drawer_height > 0.).then(|| self.drawer(drawer_height, cx));
+        let body = div()
+            .flex_1()
+            .h_full()
+            .flex()
+            .flex_col()
+            .bg(gpui::black())
+            .map(|d| match notch {
+                Some(_) => d.rounded_bl(px(16.)).rounded_br(px(16.)),
+                None => d.rounded(px(15.)),
+            })
+            .child(bar)
+            .children(drawer);
+        let ear = |name| icon(name, EAR as f32, gpui::black());
         let state = self.state.clone();
         div()
             .id("hud")
             .size_full()
             .flex()
-            .flex_col()
-            .bg(gpui::black())
             .text_color(white(0.92))
             .text_size(px(12.))
-            .map(|d| match notch {
-                Some(_) => d.rounded_bl(px(12.)).rounded_br(px(12.)),
-                None => d.rounded(px(15.)),
-            })
             // GPUI reports the first hover but, since this window never becomes key, not the
             // pointer leaving, so it never reports a second one. Pointer movement does arrive,
             // so it opens the drawer, and `watch_pointer` closes it.
@@ -178,8 +200,9 @@ impl Render for Hud {
                     cx.notify();
                 }
             }))
-            .child(bar)
-            .children(drawer)
+            .when(notch.is_some(), |d| d.child(ear("ear-left")))
+            .child(body)
+            .when(notch.is_some(), |d| d.child(ear("ear-right")))
     }
 }
 
@@ -216,9 +239,9 @@ impl Hud {
         .detach();
     }
 
-    fn wings(&self, cx: &mut Context<Self>) -> (AnyElement, AnyElement) {
+    fn wings(&self, expanded: bool, cx: &mut Context<Self>) -> (AnyElement, AnyElement) {
         let state = self.state.read(cx);
-        let record = rgb(0xff453a);
+        let record = rgb(RECORD);
         match &state.phase {
             Phase::Countdown { until, .. } => {
                 let left = until.saturating_duration_since(Instant::now()).as_secs() + 1;
@@ -239,13 +262,27 @@ impl Hud {
             Phase::Recording { .. } => {
                 let paused = state.phase.is_paused();
                 let secs = state.phase.recorded().as_secs();
+                // Paused, the dot goes hollow and the timer dims.
                 let status = if paused {
-                    icon("pause", 10., white(0.6)).into_any_element()
+                    div()
+                        .size(px(8.))
+                        .flex_none()
+                        .rounded_full()
+                        .border(px(1.5))
+                        .border_color(record)
+                        .into_any_element()
                 } else {
                     div()
                         .size(px(8.))
+                        .flex_none()
                         .rounded_full()
                         .bg(record)
+                        .shadow(vec![BoxShadow {
+                            color: hsla(3. / 360., 1., 0.61, 0.8),
+                            offset: point(px(0.), px(0.)),
+                            blur_radius: px(10.),
+                            spread_radius: px(0.),
+                        }])
                         .with_animation(
                             "pulse",
                             Animation::new(Duration::from_millis(1400))
@@ -259,25 +296,34 @@ impl Hud {
                     div()
                         .flex()
                         .items_center()
-                        .gap(px(6.))
+                        .gap(px(8.))
+                        .when(expanded, |d| d.child(self.restart_button(cx)))
                         .child(status)
                         .child(
                             div()
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(if paused { white(0.55) } else { white(0.92) })
+                                .min_w(px(34.))
+                                .text_size(px(13.))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(if paused { white(0.5) } else { gpui::white() })
                                 .child(format_elapsed(secs)),
                         )
                         .into_any_element(),
                     div()
                         .flex()
                         .items_center()
-                        .gap(px(2.))
+                        .gap(px(8.))
                         .child(self.svg_button(
                             "pause",
                             if paused { "play" } else { "pause" },
+                            gpui::white(),
                             |s, cx| s.toggle_pause(cx),
                         ))
                         .child(self.stop_button())
+                        .when(expanded, |d| {
+                            d.child(self.svg_button("discard", "x", white(0.5), |s, cx| {
+                                s.cancel_recording(cx)
+                            }))
+                        })
                         .into_any_element(),
                 )
             }
@@ -342,10 +388,6 @@ impl Hud {
                         native::open(url)
                     }))
                 });
-        }
-
-        if matches!(state.phase, Phase::Recording { .. }) {
-            return self.controls(base, cx);
         }
 
         let Phase::Saved { path, .. } = &state.phase else {
@@ -462,30 +504,28 @@ impl Hud {
         )
     }
 
-    /// Restart (with a confirming second click) and Discard, under a recording's bar.
-    fn controls(&self, base: Div, cx: &mut Context<Self>) -> Div {
+    /// Restart throws the take away, so the first click arms it (the button turns red) and a
+    /// second click within three seconds restarts.
+    fn restart_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let confirming = self
             .confirm_restart_until
             .is_some_and(|t| Instant::now() < t);
         let hud = cx.entity().downgrade();
         let state = self.state.clone();
-        let restart = div()
+        div()
             .id("restart")
+            .size(px(BUTTON))
+            .flex_none()
             .flex()
             .items_center()
-            .gap(px(5.))
-            .px(px(8.))
-            .py(px(3.))
+            .justify_center()
             .rounded(px(6.))
-            .text_size(px(11.5))
-            .font_weight(FontWeight::MEDIUM)
             .cursor_pointer()
             .when(confirming, |d| {
-                d.bg(rgb(0xff453a)).hover(|s| s.opacity(0.9))
+                d.bg(hsla(3. / 360., 1., 0.61, 0.22))
+                    .hover(|s| s.bg(hsla(3. / 360., 1., 0.61, 0.32)))
             })
-            .when(!confirming, |d| {
-                d.bg(white(0.12)).hover(|s| s.bg(white(0.2)))
-            })
+            .when(!confirming, |d| d.hover(|s| s.bg(white(0.12))))
             .on_click(move |_, _, cx| {
                 if confirming {
                     state.update(cx, |s, cx| s.restart_recording(cx));
@@ -504,51 +544,53 @@ impl Hud {
                     .detach();
                 });
             })
-            .child(icon("restart", 11., white(0.9)))
-            .child(if confirming { "Restart?" } else { "Restart" });
-        let state = self.state.clone();
-        base.justify_center().child(restart).child(drawer_button(
-            "discard",
-            "Discard",
-            false,
-            move |_, cx| state.update(cx, |s, cx| s.cancel_recording(cx)),
-        ))
+            .child(icon(
+                "restart",
+                14.,
+                if confirming {
+                    rgb(RECORD).into()
+                } else {
+                    white(0.5)
+                },
+            ))
     }
 
     fn stop_button(&self) -> impl IntoElement {
         let state = self.state.clone();
         div()
             .id("stop")
-            .size(px(20.))
-            .rounded_full()
-            .bg(white(0.16))
-            .hover(|s| s.bg(white(0.26)))
+            .size(px(BUTTON))
+            .flex_none()
+            .rounded(px(6.))
+            .hover(|s| s.bg(white(0.12)))
             .cursor_pointer()
             .flex()
             .items_center()
             .justify_center()
             .on_click(move |_, _, cx| state.update(cx, |s, cx| s.stop_recording(cx)))
-            .child(div().size(px(8.)).rounded(px(2.)).bg(rgb(0xff453a)))
+            .child(div().size(px(8.5)).rounded(px(2.)).bg(rgb(RECORD)))
     }
 
     fn svg_button(
         &self,
         id: &'static str,
         name: &'static str,
+        color: Hsla,
         on_click: impl Fn(&mut Annuncia, &mut Context<Annuncia>) + 'static,
     ) -> impl IntoElement {
         let state = self.state.clone();
         div()
             .id(id)
-            .size(px(20.))
-            .rounded_full()
-            .hover(|s| s.bg(white(0.14)))
+            .size(px(BUTTON))
+            .flex_none()
+            .rounded(px(6.))
+            .hover(|s| s.bg(white(0.12)))
             .cursor_pointer()
             .flex()
             .items_center()
             .justify_center()
             .on_click(move |_, _, cx| state.update(cx, |s, cx| on_click(s, cx)))
-            .child(icon(name, 10., white(0.85)))
+            .child(icon(name, 14., color))
     }
 
     fn icon_button(
