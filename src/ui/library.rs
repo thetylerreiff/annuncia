@@ -1215,10 +1215,12 @@ impl Render for LibraryView {
                 cx.listener(|this, _, _, cx| this.end_scrub(cx)),
             )
             .size_full()
+            .relative()
             .flex()
             .flex_col()
             .bg(theme.window)
-            .text_color(theme.text);
+            .text_color(theme.text)
+            .when(theme.stars, |d| d.child(super::starfield()));
         if let Some((settings, _)) = &self.settings {
             return root.child(settings.clone());
         }

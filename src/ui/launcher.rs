@@ -339,8 +339,10 @@ impl Render for Launcher {
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key))
             .size_full()
+            .relative()
             .bg(theme.panel)
             .text_color(theme.text)
+            .when(theme.stars, |d| d.child(super::starfield()))
             .child(content)
     }
 }

@@ -396,9 +396,11 @@ impl Render for SettingsView {
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key))
             .size_full()
+            .relative()
             .flex()
             .bg(theme.window)
             .text_color(theme.text)
+            .when(theme.stars, |d| d.child(super::starfield()))
             .child(self.sidebar(theme, cx))
             .child(
                 div()
