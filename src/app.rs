@@ -27,7 +27,7 @@ use crate::ui::editor::{self, Editor};
 use crate::ui::hud::{self, Hud};
 use crate::ui::launcher::{self, Launcher};
 use crate::ui::library::LibraryView;
-use crate::updater::{self, Updater};
+use crate::updater::{self, ReadyUpdate, Updater};
 
 /// Owns the controller for the life of the app.
 struct AppState {
@@ -152,6 +152,8 @@ pub struct Annuncia {
     camera_failed: bool,
     launcher_opening: bool,
     quit_when_stopped: bool,
+    /// Relaunch into the downloaded update, rather than just quit, once the recording stops.
+    install_when_stopped: bool,
     editor_window: Option<WindowHandle<Editor>>,
     /// The recording open in the editor, which mustn't be renamed or trashed under it.
     pub editing: Option<PathBuf>,
@@ -162,6 +164,8 @@ pub struct Annuncia {
     library_opening: bool,
     /// Sparkle, when running from the app bundle.
     pub updater: Option<Updater>,
+    /// The update Sparkle has downloaded, which the menu, library and Settings call out.
+    pub update_ready: Option<ReadyUpdate>,
     last_tick: u64,
 }
 
@@ -259,6 +263,7 @@ impl Annuncia {
             camera_failed: false,
             launcher_opening: false,
             quit_when_stopped: false,
+            install_when_stopped: false,
             editor_window: None,
             editing: None,
             library: Library::load(),
@@ -266,6 +271,7 @@ impl Annuncia {
             library_window: None,
             library_opening: false,
             updater,
+            update_ready: None,
             last_tick: u64::MAX,
         }
     }
@@ -284,6 +290,7 @@ impl Annuncia {
                 TrayAction::OpenSettings => self.open_settings(cx),
                 TrayAction::OpenLibrary => self.open_library(cx),
                 TrayAction::CheckForUpdates => self.check_for_updates(cx),
+                TrayAction::InstallUpdate => self.install_update(cx),
                 TrayAction::Quit => self.quit(cx),
             }
         }
@@ -300,6 +307,14 @@ impl Annuncia {
         }
         while let Ok(event) = self.events_rx.try_recv() {
             self.on_recorder_event(event, cx);
+        }
+        // Sparkle tells its delegate, outside GPUI, when an update has downloaded.
+        let ready = self.updater.as_ref().and_then(Updater::ready);
+        if ready.as_ref().map(|r| &r.version) != self.update_ready.as_ref().map(|r| &r.version) {
+            self.tray
+                .set_update(ready.as_ref().map(|r| r.version.as_str()));
+            self.update_ready = ready;
+            cx.notify();
         }
         if let Some(download) = &self.download {
             let shown = (download.fraction() * 1000.) as u32;
@@ -587,7 +602,9 @@ impl Annuncia {
                     }
                 };
                 state.sync_windows(cx);
-                if state.quit_when_stopped {
+                if state.install_when_stopped {
+                    state.relaunch_into_update(cx);
+                } else if state.quit_when_stopped {
                     cx.quit();
                 }
                 cx.notify();
@@ -833,6 +850,29 @@ impl Annuncia {
             cx.activate(true);
             updater.check();
         }
+    }
+
+    /// Relaunches into the downloaded update, finishing a recording first, as quitting does.
+    pub fn install_update(&mut self, cx: &mut Context<Self>) {
+        if self.update_ready.is_none() {
+            return;
+        }
+        match self.phase {
+            Phase::Recording { .. } | Phase::Stopping { .. } => {
+                self.install_when_stopped = true;
+                self.quit(cx);
+            }
+            _ => self.relaunch_into_update(cx),
+        }
+    }
+
+    fn relaunch_into_update(&self, cx: &mut Context<Self>) {
+        let Some(update) = self.update_ready.clone() else {
+            cx.quit();
+            return;
+        };
+        // Sparkle quits the app from inside the handler, so run it outside GPUI's hold on it.
+        cx.spawn(async move |_, _| update.install()).detach();
     }
 
     pub fn open_library(&mut self, cx: &mut Context<Self>) {

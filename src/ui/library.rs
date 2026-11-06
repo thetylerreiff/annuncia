@@ -1268,6 +1268,14 @@ impl Render for LibraryView {
             })
             // Room for the native search field, then the cog.
             .child(div().flex_1())
+            .when(self.state.read(cx).update_ready.is_some(), |d| {
+                let state = self.state.clone();
+                d.child(
+                    button("install-update", "Relaunch to Update", true, theme)
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(move |_, _, cx| state.update(cx, |s, cx| s.install_update(cx))),
+                )
+            })
             .child(div().w(px(SEARCH_WIDTH + 8.)).flex_none())
             .child(
                 div()

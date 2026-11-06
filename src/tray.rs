@@ -15,6 +15,8 @@ pub enum TrayAction {
     OpenFolder,
     OpenSettings,
     CheckForUpdates,
+    /// The updates item, once an update has downloaded.
+    InstallUpdate,
     Quit,
 }
 
@@ -31,6 +33,8 @@ pub struct Tray {
     toggle_item: MenuItem,
     pause_item: MenuItem,
     restart_item: MenuItem,
+    updates_item: MenuItem,
+    update_ready: bool,
     state: TrayState,
 }
 
@@ -50,6 +54,7 @@ impl Tray {
         let toggle_item = MenuItem::with_id(TOGGLE, "Start Recording", true, None);
         let pause_item = MenuItem::with_id(PAUSE, "Pause Recording", false, None);
         let restart_item = MenuItem::with_id(RESTART, "Restart Recording", false, None);
+        let updates_item = MenuItem::with_id(UPDATES, "Check for Updates…", updates, None);
         let menu = Menu::new();
         menu.append_items(&[
             &toggle_item,
@@ -60,7 +65,7 @@ impl Tray {
             &MenuItem::with_id(LIBRARY, "Library…", true, None),
             &MenuItem::with_id(FOLDER, "Open Recordings Folder", true, None),
             &MenuItem::with_id(SETTINGS, "Settings…", true, None),
-            &MenuItem::with_id(UPDATES, "Check for Updates…", updates, None),
+            &updates_item,
             &PredefinedMenuItem::separator(),
             &MenuItem::with_id(QUIT, "Quit Annuncia", true, None),
         ])?;
@@ -75,6 +80,8 @@ impl Tray {
             toggle_item,
             pause_item,
             restart_item,
+            updates_item,
+            update_ready: false,
             state: TrayState::Idle,
         })
     }
@@ -100,6 +107,7 @@ impl Tray {
                 LIBRARY => TrayAction::OpenLibrary,
                 FOLDER => TrayAction::OpenFolder,
                 SETTINGS => TrayAction::OpenSettings,
+                UPDATES if self.update_ready => TrayAction::InstallUpdate,
                 UPDATES => TrayAction::CheckForUpdates,
                 QUIT => TrayAction::Quit,
                 _ => continue,
@@ -125,6 +133,15 @@ impl Tray {
             "Resume Recording"
         } else {
             "Pause Recording"
+        });
+    }
+
+    /// Turns "Check for Updates…" into relaunching, once an update has downloaded.
+    pub fn set_update(&mut self, version: Option<&str>) {
+        self.update_ready = version.is_some();
+        self.updates_item.set_text(match version {
+            Some(version) => format!("Relaunch to Install {version}"),
+            None => "Check for Updates…".to_string(),
         });
     }
 

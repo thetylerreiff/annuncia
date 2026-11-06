@@ -2,10 +2,12 @@
 //! runtime rather than linked, so the bare binary from `cargo run` still starts (without updates).
 //! The public signing key and the defaults (check daily, download and install on quit) are in the
 //! bundle's Info.plist; Sparkle keeps the user's choice in its own preferences. The feed depends
-//! on the update channel, which a delegate hands Sparkle each time it checks.
+//! on the update channel, which a delegate hands Sparkle each time it checks. The delegate also
+//! takes over an update Sparkle has downloaded, so the app can offer to relaunch into it.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
+use block2::{Block, RcBlock};
 use objc2::rc::{Allocated, Retained};
 use objc2::runtime::{AnyClass, AnyObject, NSObject};
 use objc2::{AnyThread as _, DefinedClass as _, define_class, msg_send};
@@ -38,19 +40,56 @@ pub fn display_version() -> String {
         .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string())
 }
 
+/// An update Sparkle has downloaded, which installs when Annuncia quits.
+#[derive(Clone)]
+pub struct ReadyUpdate {
+    pub version: String,
+    install: RcBlock<dyn Fn()>,
+}
+
+impl ReadyUpdate {
+    /// Installs the update and relaunches. Sparkle quits the app from inside this.
+    pub fn install(&self) {
+        self.install.call(());
+    }
+}
+
+struct DelegateIvars {
+    channel: Cell<UpdateChannel>,
+    ready: RefCell<Option<ReadyUpdate>>,
+}
+
 define_class!(
     #[unsafe(super(NSObject))]
     #[name = "AnnunciaUpdaterDelegate"]
-    #[ivars = Cell<UpdateChannel>]
+    #[ivars = DelegateIvars]
     struct Delegate;
 
     impl Delegate {
         #[unsafe(method_id(feedURLStringForUpdater:))]
         fn feed_url(&self, _updater: &AnyObject) -> Option<Retained<NSString>> {
-            Some(NSString::from_str(match self.ivars().get() {
+            Some(NSString::from_str(match self.ivars().channel.get() {
                 UpdateChannel::Stable => STABLE_FEED,
                 UpdateChannel::Nightly => NIGHTLY_FEED,
             }))
+        }
+
+        /// A downloaded update. Taking it (YES) keeps Sparkle from nagging about it later; it
+        /// still installs on quit either way.
+        #[unsafe(method(updater:willInstallUpdateOnQuit:immediateInstallationBlock:))]
+        fn will_install_on_quit(
+            &self,
+            _updater: &AnyObject,
+            item: &AnyObject,
+            install: &Block<dyn Fn()>,
+        ) -> bool {
+            let version: Option<Retained<NSString>> =
+                unsafe { msg_send![item, displayVersionString] };
+            *self.ivars().ready.borrow_mut() = Some(ReadyUpdate {
+                version: version.map(|v| v.to_string()).unwrap_or_default(),
+                install: install.copy(),
+            });
+            true
         }
     }
 );
@@ -76,7 +115,10 @@ impl Updater {
         }
         let class = AnyClass::get(c"SPUStandardUpdaterController")?;
         let delegate: Retained<Delegate> = {
-            let this = Delegate::alloc().set_ivars(Cell::new(channel));
+            let this = Delegate::alloc().set_ivars(DelegateIvars {
+                channel: Cell::new(channel),
+                ready: RefCell::new(None),
+            });
             unsafe { msg_send![super(this), init] }
         };
         let none: Option<&AnyObject> = None;
@@ -99,7 +141,7 @@ impl Updater {
     /// Switches feeds, and looks at the new one right away when updates are automatic. Sparkle
     /// never goes back a version, so leaving Nightly keeps the nightly until Stable passes it.
     pub fn set_channel(&self, channel: UpdateChannel) {
-        self.delegate.ivars().set(channel);
+        self.delegate.ivars().channel.set(channel);
         if self.automatic() {
             let updater = self.updater();
             let _: () = unsafe { msg_send![&updater, checkForUpdatesInBackground] };
@@ -119,6 +161,11 @@ impl Updater {
             let _: () = msg_send![&updater, setAutomaticallyChecksForUpdates: on];
             let _: () = msg_send![&updater, setAutomaticallyDownloadsUpdates: on];
         }
+    }
+
+    /// The update waiting to install, once Sparkle has downloaded one.
+    pub fn ready(&self) -> Option<ReadyUpdate> {
+        self.delegate.ivars().ready.borrow().clone()
     }
 
     fn updater(&self) -> Retained<AnyObject> {

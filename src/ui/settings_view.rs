@@ -503,6 +503,47 @@ impl SettingsView {
                             .child(page.title())
                     })),
             )
+            .children(self.update_card(theme, cx))
+    }
+
+    /// Pinned to the sidebar's foot, so it shows on every page, once an update has downloaded.
+    fn update_card(&self, theme: Theme, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let update = self.state.read(cx).update_ready.clone()?;
+        let state = self.state.clone();
+        Some(
+            div()
+                .absolute()
+                .bottom(px(12.))
+                .left(px(10.))
+                .right(px(10.))
+                .flex()
+                .flex_col()
+                .gap(px(8.))
+                .p(px(10.))
+                .rounded(px(9.))
+                .bg(theme.surface)
+                .border_1()
+                .border_color(theme.hairline)
+                .child(
+                    div()
+                        .child(
+                            div()
+                                .text_size(px(12.5))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child("Update ready"),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.5))
+                                .text_color(theme.text_muted)
+                                .child(format!("Version {}", update.version)),
+                        ),
+                )
+                .child(
+                    button("install-update", "Relaunch to Update", true, theme)
+                        .on_click(move |_, _, cx| state.update(cx, |s, cx| s.install_update(cx))),
+                ),
+        )
     }
 }
 
