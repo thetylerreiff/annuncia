@@ -18,8 +18,8 @@ use objc2_av_foundation::{
     AVAssetExportPresetHEVCHighestQuality, AVAssetExportPresetHighestQuality,
     AVAssetExportPresetPassthrough, AVAssetExportSession, AVAssetExportSessionStatus,
     AVAssetImageGenerator, AVAssetReader, AVAssetReaderAudioMixOutput, AVFileTypeMPEG4,
-    AVMediaTypeAudio, AVMutableComposition, AVMutableCompositionTrack, AVURLAsset,
-    AVVideoComposition,
+    AVMediaType, AVMediaTypeAudio, AVMediaTypeVideo, AVMutableComposition,
+    AVMutableCompositionTrack, AVURLAsset, AVVideoComposition,
 };
 use objc2_core_foundation::{CFString, CFURL, CGSize};
 use objc2_core_media::{CMTime, CMTimeRange, kCMPersistentTrackID_Invalid, kCMTimeZero};
@@ -29,7 +29,7 @@ use objc2_image_io::CGImageDestination;
 use crate::settings::Codec;
 
 /// Time scale for edit points: divisible by 24, 25, 30 and 60 fps.
-const TIMESCALE: i32 = 600;
+pub(crate) const TIMESCALE: i32 = 600;
 
 /// A file, or the given ranges of it in seconds, to place one after another.
 pub struct Source {
@@ -49,14 +49,16 @@ pub fn file_url(path: &Path) -> Retained<NSURL> {
     NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()))
 }
 
-fn asset(path: &Path) -> Retained<AVURLAsset> {
+pub(crate) fn asset(path: &Path) -> Retained<AVURLAsset> {
     // SAFETY: plain constructor; the asset loads lazily.
     unsafe { AVURLAsset::URLAssetWithURL_options(&file_url(path), None) }
 }
 
-fn time(seconds: f64) -> CMTime {
+pub(crate) fn time(seconds: f64) -> CMTime {
+    // Rounded: `CMTime::with_seconds` truncates, which can land a tick before a frame.
+    let ticks = (seconds * f64::from(TIMESCALE)).round() as i64;
     // SAFETY: pure value conversion.
-    unsafe { CMTime::with_seconds(seconds, TIMESCALE) }
+    unsafe { CMTime::new(ticks, TIMESCALE) }
 }
 
 /// Length of a media file in seconds.
@@ -80,11 +82,35 @@ pub fn join(parts: &[PathBuf], out: &Path) -> Result<()> {
 
 /// Writes `sources` back to back into the MP4 at `out`, which must not exist yet. `progress`
 /// receives values from 0 to 1 while the export runs.
-#[allow(deprecated)] // The synchronous `tracks`/`duration` accessors are fine on a worker thread.
 pub fn export(
     sources: &[Source],
     out: &Path,
     encode: Encode,
+    progress: impl Fn(f32) + Sync,
+) -> Result<()> {
+    // Cutting one recording: copy what's untouched and re-encode only around the cuts, which is
+    // many times faster. If the recording doesn't allow that, re-encode all of it.
+    if let (Encode::Reencode(codec), [source]) = (&encode, sources)
+        && let Some(ranges) = &source.ranges
+    {
+        match crate::smart_cut::export(&source.path, ranges, *codec, out, &progress) {
+            Ok(()) => return Ok(()),
+            Err(err) => {
+                eprintln!("annuncia: re-encoding the whole edit: {err:#}");
+                let _ = std::fs::remove_file(out);
+            }
+        }
+    }
+    render(sources, out, encode, None, progress)
+}
+
+/// [`export`] without the fast path, and with only the tracks of media type `only` if given.
+#[allow(deprecated)] // The synchronous `tracks`/`duration` accessors are fine on a worker thread.
+pub(crate) fn render(
+    sources: &[Source],
+    out: &Path,
+    encode: Encode,
+    only: Option<&AVMediaType>,
     progress: impl Fn(f32),
 ) -> Result<()> {
     // SAFETY: the composition and export session live on this thread; the export's completion
@@ -105,6 +131,9 @@ pub fn export(
                 let mut seen: HashMap<String, usize> = HashMap::new();
                 for track in tracks.iter() {
                     let media = track.mediaType();
+                    if only.is_some_and(|only| *only != *media) {
+                        continue;
+                    }
                     let kind = media.to_string();
                     let n = seen.entry(kind.clone()).or_default();
                     let key = (kind, *n);
@@ -156,7 +185,11 @@ pub fn export(
             preset,
         )
         .context("couldn't create an export session")?;
-        if matches!(encode, Encode::Reencode(_)) {
+        let has_video = composition
+            .tracks()
+            .iter()
+            .any(|t| AVMediaTypeVideo.is_some_and(|video| *t.mediaType() == *video));
+        if matches!(encode, Encode::Reencode(_)) && has_video {
             // Without a video composition the quality presets quietly copy matching tracks,
             // cuts and all. Rendering through one forces every frame to be encoded.
             export.setVideoComposition(Some(

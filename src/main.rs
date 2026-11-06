@@ -13,6 +13,7 @@ mod player;
 mod popout;
 mod recorder;
 mod settings;
+mod smart_cut;
 mod speech;
 mod transcriber;
 mod transcript;
