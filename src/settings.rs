@@ -115,6 +115,17 @@ pub struct Settings {
     /// Which builds updates come from; unset means the channel this build came from.
     pub update_channel: Option<UpdateChannel>,
     pub hotkeys: HotkeySettings,
+    /// First-run setup is done. Settings files from before it existed count as done, so only
+    /// new installs (and anyone without Screen Recording access) see it unasked.
+    #[serde(default = "yes")]
+    pub onboarded: bool,
+    /// Screen Recording was asked for once. macOS only shows that prompt the first time, so
+    /// from then on setup points at System Settings instead.
+    pub asked_for_screen: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 impl Default for Settings {
@@ -140,6 +151,8 @@ impl Default for Settings {
             cleanup: crate::cleanup::Cleanup::Off,
             update_channel: None,
             hotkeys: HotkeySettings::default(),
+            onboarded: false,
+            asked_for_screen: false,
         }
     }
 }
@@ -204,4 +217,17 @@ pub fn tilde(path: &Path) -> String {
         return format!("~/{}", rest.display());
     }
     path.display().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_from_before_setup_count_as_onboarded() {
+        let old: Settings = serde_json::from_str(r#"{ "fps": 60 }"#).unwrap();
+        assert!(old.onboarded);
+        assert_eq!(old.fps, 60);
+        assert!(!Settings::default().onboarded);
+    }
 }

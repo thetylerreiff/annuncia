@@ -4,6 +4,7 @@ pub mod hud;
 pub mod icons;
 pub mod launcher;
 pub mod library;
+pub mod onboarding;
 pub mod settings_view;
 pub mod transcript_view;
 

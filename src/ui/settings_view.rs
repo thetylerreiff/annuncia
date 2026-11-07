@@ -9,6 +9,7 @@ use crate::app::{self, Annuncia};
 use crate::cleanup::Cleanup;
 use crate::hotkeys::{HotkeyAction, display_binding, keystroke_to_binding};
 use crate::models::Transcription;
+use crate::native;
 use crate::settings::{self, BubbleSize, Codec, Settings, UpdateChannel, tilde};
 use crate::ui::icons::icon;
 use crate::ui::{Theme, button, segmented, toggle};
@@ -200,8 +201,18 @@ impl Render for SettingsView {
                 ),
                 theme,
             ))
+            .children(login_row(&self.state, theme, cx))
             .children(self.updates_row(theme, cx))
             .children(self.channel_row(theme, cx))
+            .child(row(
+                "Setup",
+                Some("Permissions, transcription and shortcuts, as on first launch".into()),
+                button("show-setup", "Show…", false, theme).on_click({
+                    let state = self.state.clone();
+                    move |_, _, cx| state.update(cx, |s, cx| s.open_onboarding(cx))
+                }),
+                theme,
+            ))
             .child(row(
                 "Settings file",
                 Some(tilde(&settings::settings_path())),
@@ -872,7 +883,37 @@ impl SettingsView {
     }
 }
 
-fn section(theme: Theme) -> Card {
+/// Open at login, shown only in the app bundle (the bare binary can't be a login item).
+pub fn login_row(state: &Entity<Annuncia>, theme: Theme, cx: &App) -> Option<AnyElement> {
+    let status = native::login_item()?;
+    let error = state.read(cx).login_error.clone();
+    let detail = match (status, error) {
+        (_, Some(error)) => error.to_string(),
+        (native::LoginItem::NeedsApproval, None) => {
+            "Turned off in System Settings › General › Login Items".into()
+        }
+        _ => "Annuncia waits in the menu bar from the moment you log in".into(),
+    };
+    let control = match status {
+        native::LoginItem::NeedsApproval => button("login-settings", "Open Settings", false, theme)
+            .on_click(|_, _, _| native::open_login_items_settings())
+            .into_any_element(),
+        status => {
+            let state = state.clone();
+            let on = status == native::LoginItem::On;
+            toggle(
+                "open-at-login",
+                on,
+                theme,
+                Box::new(move |_, _, cx| state.update(cx, |s, cx| s.set_open_at_login(!on, cx))),
+            )
+            .into_any_element()
+        }
+    };
+    Some(row("Open at login", Some(detail), control, theme).into_any_element())
+}
+
+pub fn section(theme: Theme) -> Card {
     Card {
         theme,
         rows: Vec::new(),
@@ -882,18 +923,18 @@ fn section(theme: Theme) -> Card {
 /// A card of rows with inset rules between them. GPUI clips children to rectangles, not rounded
 /// corners, so the card paints the surface itself and its rows stay transparent.
 #[derive(IntoElement)]
-struct Card {
+pub struct Card {
     theme: Theme,
     rows: Vec<AnyElement>,
 }
 
 impl Card {
-    fn child(mut self, row: impl IntoElement) -> Self {
+    pub fn child(mut self, row: impl IntoElement) -> Self {
         self.rows.push(row.into_any_element());
         self
     }
 
-    fn children(mut self, rows: impl IntoIterator<Item = impl IntoElement>) -> Self {
+    pub fn children(mut self, rows: impl IntoIterator<Item = impl IntoElement>) -> Self {
         self.rows
             .extend(rows.into_iter().map(IntoElement::into_any_element));
         self
@@ -923,7 +964,7 @@ impl RenderOnce for Card {
     }
 }
 
-fn row(
+pub fn row(
     label: &'static str,
     detail: Option<String>,
     control: impl IntoElement,

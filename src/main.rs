@@ -9,6 +9,7 @@ mod mic_level;
 mod models;
 mod native;
 mod orb;
+mod permissions;
 mod player;
 mod popout;
 mod recorder;

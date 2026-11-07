@@ -348,10 +348,67 @@ pub fn open(target: impl AsRef<std::ffi::OsStr>) {
     let _ = std::process::Command::new("open").arg(target).spawn();
 }
 
-pub const SCREEN_RECORDING_SETTINGS_URL: &str =
-    "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
-pub const CAMERA_SETTINGS_URL: &str =
-    "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera";
+/// The `.app` Annuncia runs from; `None` for the bare binary from `cargo run`.
+pub fn bundle_path() -> Option<std::path::PathBuf> {
+    let path = objc2_foundation::NSBundle::mainBundle()
+        .bundlePath()
+        .to_string();
+    path.ends_with(".app").then(|| path.into())
+}
+
+/// Opens Annuncia again once this process has exited; the caller then quits. Screen Recording
+/// access only takes effect at launch.
+pub fn relaunch_after_quit() {
+    let Some(target) = bundle_path().or_else(|| std::env::current_exe().ok()) else {
+        return;
+    };
+    // `open` doesn't pass on the environment, so a custom settings folder is handed over.
+    let script = r#"while kill -0 "$1" 2>/dev/null; do sleep 0.1; done
+if [ ! -d "$2" ]; then "$2" &
+elif [ -n "$XDG_CONFIG_HOME" ]; then open --env "XDG_CONFIG_HOME=$XDG_CONFIG_HOME" "$2"
+else open "$2"; fi"#;
+    let _ = std::process::Command::new("/bin/sh")
+        .args(["-c", script, "sh", &std::process::id().to_string()])
+        .arg(target)
+        .spawn();
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LoginItem {
+    Off,
+    On,
+    /// Registered, but switched off in System Settings › Login Items.
+    NeedsApproval,
+}
+
+/// Whether Annuncia opens at login; `None` outside the app bundle, where it can't.
+pub fn login_item() -> Option<LoginItem> {
+    use objc2_service_management::{SMAppService, SMAppServiceStatus};
+    bundle_path()?;
+    let status = unsafe { SMAppService::mainAppService().status() };
+    Some(match status {
+        SMAppServiceStatus::Enabled => LoginItem::On,
+        SMAppServiceStatus::RequiresApproval => LoginItem::NeedsApproval,
+        _ => LoginItem::Off,
+    })
+}
+
+pub fn set_login_item(on: bool) -> anyhow::Result<()> {
+    use objc2_service_management::SMAppService;
+    let service = unsafe { SMAppService::mainAppService() };
+    let result = unsafe {
+        if on {
+            service.registerAndReturnError()
+        } else {
+            service.unregisterAndReturnError()
+        }
+    };
+    result.map_err(|err| anyhow::anyhow!("{}", err.localizedDescription()))
+}
+
+pub fn open_login_items_settings() {
+    unsafe { objc2_service_management::SMAppService::openSystemSettingsLoginItems() };
+}
 
 /// Moves a file to the Trash rather than deleting it outright; returns whether it did.
 pub fn trash(path: &Path) -> bool {

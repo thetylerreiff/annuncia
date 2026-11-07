@@ -9,11 +9,11 @@ use core_foundation::base::TCFType as _;
 use core_video::pixel_buffer::CVPixelBuffer;
 use dispatch2::{DispatchQueue, DispatchQueueAttr};
 use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, Bool, NSObject, NSObjectProtocol, ProtocolObject};
+use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol, ProtocolObject};
 use objc2::{AllocAnyThread, DefinedClass, define_class, msg_send};
 use objc2_av_foundation::{
-    AVAuthorizationStatus, AVCaptureConnection, AVCaptureDevice, AVCaptureDeviceDiscoverySession,
-    AVCaptureDeviceInput, AVCaptureDevicePosition, AVCaptureDeviceTypeBuiltInWideAngleCamera,
+    AVCaptureConnection, AVCaptureDevice, AVCaptureDeviceDiscoverySession, AVCaptureDeviceInput,
+    AVCaptureDevicePosition, AVCaptureDeviceTypeBuiltInWideAngleCamera,
     AVCaptureDeviceTypeContinuityCamera, AVCaptureDeviceTypeExternal, AVCaptureOutput,
     AVCaptureSession, AVCaptureSessionPreset1280x720, AVCaptureVideoDataOutput,
     AVCaptureVideoDataOutputSampleBufferDelegate, AVMediaTypeVideo,
@@ -21,6 +21,7 @@ use objc2_av_foundation::{
 use objc2_core_media::CMSampleBuffer;
 use objc2_foundation::{NSArray, NSDictionary, NSNumber, NSString};
 
+use crate::permissions::{Access, Permission};
 use crate::popout::{Compositor, PopoutSlot};
 
 /// `kCVPixelFormatType_420YpCbCr8BiPlanarFullRange`, the only format GPUI surfaces accept.
@@ -66,34 +67,6 @@ impl FrameSlot {
 pub struct CameraDevice {
     pub id: String,
     pub name: String,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Access {
-    Granted,
-    Denied,
-    Undetermined,
-}
-
-pub fn access() -> Access {
-    let Some(video) = (unsafe { AVMediaTypeVideo }) else {
-        return Access::Denied;
-    };
-    match unsafe { AVCaptureDevice::authorizationStatusForMediaType(video) } {
-        AVAuthorizationStatus::Authorized => Access::Granted,
-        AVAuthorizationStatus::NotDetermined => Access::Undetermined,
-        _ => Access::Denied,
-    }
-}
-
-/// Shows the system prompt; `done` runs on an arbitrary queue.
-pub fn request_access(done: impl Fn(bool) + Send + Sync + 'static) {
-    let Some(video) = (unsafe { AVMediaTypeVideo }) else {
-        done(false);
-        return;
-    };
-    let block = block2::RcBlock::new(move |granted: Bool| done(granted.as_bool()));
-    unsafe { AVCaptureDevice::requestAccessForMediaType_completionHandler(video, &block) };
 }
 
 pub fn devices() -> Vec<CameraDevice> {
@@ -188,7 +161,7 @@ impl Camera {
         slot: Arc<FrameSlot>,
         popout: Option<(f64, Arc<PopoutSlot>)>,
     ) -> Result<Self> {
-        if access() == Access::Denied {
+        if Permission::Camera.access() == Access::Denied {
             return Err(anyhow!(
                 "Camera access is off for Annuncia in System Settings"
             ));

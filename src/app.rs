@@ -16,6 +16,7 @@ use crate::library::Library;
 use crate::mic_level::MicLevel;
 use crate::models::{Download, Transcription};
 use crate::native::{self, OverlayLevel, TopLeftRect, WindowSetup};
+use crate::permissions::{Access, Permission};
 use crate::popout::PopoutSlot;
 use crate::recorder::{self, RecorderEvent, Session, StartRequest, Target, WindowChoice};
 use crate::settings::{CaptureMode, Settings, UpdateChannel};
@@ -27,6 +28,7 @@ use crate::ui::editor::{self, Editor};
 use crate::ui::hud::{self, Hud};
 use crate::ui::launcher::{self, Launcher};
 use crate::ui::library::LibraryView;
+use crate::ui::onboarding::{self, Onboarding};
 use crate::updater::{self, ReadyUpdate, Updater};
 
 /// Owns the controller for the life of the app.
@@ -162,6 +164,10 @@ pub struct Annuncia {
     pub library_revision: u64,
     library_window: Option<WindowHandle<LibraryView>>,
     library_opening: bool,
+    onboarding_window: Option<WindowHandle<Onboarding>>,
+    onboarding_opening: bool,
+    /// Why turning Open at login on or off didn't work.
+    pub login_error: Option<SharedString>,
     /// Sparkle, when running from the app bundle.
     pub updater: Option<Updater>,
     /// The update Sparkle has downloaded, which the menu, library and Settings call out.
@@ -188,6 +194,15 @@ pub fn run() {
                 name: "Annuncia".into(),
                 items: vec![MenuItem::action("Quit Annuncia", Quit)],
             }]);
+            // Only the app bundle can be granted access, so the bare binary from `cargo run`
+            // doesn't open setup on its own (Settings › Setup still does).
+            state.update(cx, |s, cx| {
+                let needed =
+                    !s.settings.onboarded || Permission::Screen.access() != Access::Granted;
+                if needed && native::bundle_path().is_some() {
+                    s.open_onboarding(cx);
+                }
+            });
             cx.set_global(AppState { _state: state });
         });
 }
@@ -270,6 +285,9 @@ impl Annuncia {
             library_revision: 0,
             library_window: None,
             library_opening: false,
+            onboarding_window: None,
+            onboarding_opening: false,
+            login_error: None,
             updater,
             update_ready: None,
             last_tick: u64::MAX,
@@ -473,10 +491,9 @@ impl Annuncia {
                 }
                 Err(err) => {
                     state.phase = Phase::Idle;
-                    let action = format!("{err:#}").contains("Screen Recording").then_some((
-                        "Open Settings".into(),
-                        native::SCREEN_RECORDING_SETTINGS_URL,
-                    ));
+                    let action = format!("{err:#}")
+                        .contains("Screen Recording")
+                        .then_some(("Open Settings".into(), Permission::Screen.settings_url()));
                     state.show_notice(format!("{err:#}"), action, cx);
                 }
             });
@@ -756,10 +773,7 @@ impl Annuncia {
                     }
                     Err(err) => state.show_notice(
                         format!("{err:#}"),
-                        Some((
-                            "Open Settings".into(),
-                            native::SCREEN_RECORDING_SETTINGS_URL,
-                        )),
+                        Some(("Open Settings".into(), Permission::Screen.settings_url())),
                         cx,
                     ),
                 }
@@ -882,6 +896,7 @@ impl Annuncia {
     /// The library window, on its recordings or on Settings. It makes Annuncia a regular app
     /// while it's open: in the Dock and in ⌘-Tab.
     fn show_library(&mut self, settings: bool, cx: &mut Context<Self>) {
+        self.login_error = None;
         self.close_launcher(cx);
         self.library.prune();
         native::set_regular_activation_policy();
@@ -913,6 +928,7 @@ impl Annuncia {
             state.update(cx, |s, _| {
                 s.library_window = handle;
                 s.library_opening = false;
+                s.sync_activation_policy();
             });
             if let Some(handle) = handle
                 && settings
@@ -924,7 +940,102 @@ impl Annuncia {
 
     pub fn library_closed(&mut self) {
         self.library_window = None;
-        native::set_accessory_activation_policy();
+        self.sync_activation_policy();
+    }
+
+    /// A regular app (in the Dock and ⌘-Tab) while a normal window is open, else menu bar only.
+    fn sync_activation_policy(&self) {
+        if self.library_window.is_some() || self.onboarding_window.is_some() {
+            native::set_regular_activation_policy();
+        } else {
+            native::set_accessory_activation_policy();
+        }
+    }
+
+    // MARK: onboarding
+
+    /// First-run setup: permissions, transcription, and where Annuncia lives.
+    pub fn open_onboarding(&mut self, cx: &mut Context<Self>) {
+        self.login_error = None;
+        self.close_launcher(cx);
+        native::set_regular_activation_policy();
+        if let Some(handle) = self.onboarding_window {
+            when_active(cx, move |active, cx| {
+                if active {
+                    let _ = handle.update(cx, |_, window, _| window.activate_window());
+                }
+            });
+            return;
+        }
+        if self.onboarding_opening {
+            return;
+        }
+        self.onboarding_opening = true;
+        let state = cx.entity();
+        when_active(cx, move |active, cx| {
+            let handle = onboarding::open(state.clone(), active, cx);
+            state.update(cx, |s, _| {
+                s.onboarding_window = handle;
+                s.onboarding_opening = false;
+                s.sync_activation_policy();
+            });
+        });
+    }
+
+    /// The setup window closed, finished or not. Closed early, setup still counts as done once
+    /// Screen Recording is allowed, so it doesn't come back every launch. Whatever wasn't
+    /// allowed is turned off rather than failing at the next recording.
+    pub fn onboarding_closed(&mut self, finished: bool, cx: &mut Context<Self>) {
+        self.onboarding_window = None;
+        self.sync_activation_policy();
+        let screen = Permission::Screen.access() == Access::Granted;
+        let mic = Permission::Microphone.access() == Access::Granted;
+        let camera = Permission::Camera.access() == Access::Granted;
+        self.update_settings(cx, |s| {
+            s.onboarded |= finished || screen;
+            s.mic_enabled &= mic;
+            s.camera_enabled &= camera;
+        });
+    }
+
+    /// Ends setup by opening the panel under the menu bar icon, so you see where Annuncia is.
+    pub fn finish_onboarding(&mut self, cx: &mut Context<Self>) {
+        if let Some(handle) = self.onboarding_window {
+            cx.defer(move |cx| {
+                let _ = handle.update(cx, |_, window, _| window.remove_window());
+            });
+        }
+        self.onboarding_closed(true, cx);
+        let state = cx.entity();
+        cx.defer(move |cx| state.update(cx, |s, cx| s.toggle_launcher(cx)));
+    }
+
+    /// A microphone or camera allowed during setup, by its prompt or in System Settings, is
+    /// switched on.
+    pub fn permission_granted(&mut self, permission: Permission, cx: &mut Context<Self>) {
+        match permission {
+            Permission::Microphone => self.update_settings(cx, |s| s.mic_enabled = true),
+            Permission::Camera => self.update_settings(cx, |s| s.camera_enabled = true),
+            Permission::Screen => {}
+        }
+    }
+
+    /// Quits and opens again, which Screen Recording access needs before it takes effect.
+    /// With an update downloaded, Sparkle installs it and does the relaunch.
+    pub fn relaunch(&mut self, cx: &mut Context<Self>) {
+        if self.update_ready.is_some() {
+            self.install_update(cx);
+            return;
+        }
+        native::relaunch_after_quit();
+        self.quit(cx);
+    }
+
+    pub fn set_open_at_login(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.login_error = native::set_login_item(on)
+            .err()
+            .map(|err| format!("{err:#}").into());
+        cx.notify();
     }
 
     /// Renames a recording's file in place, carrying its transcript and thumbnail over.
@@ -1297,8 +1408,8 @@ impl Annuncia {
     }
 
     fn start_camera(&mut self, cx: &mut Context<Self>) {
-        match camera::access() {
-            camera::Access::Granted => {
+        match Permission::Camera.access() {
+            Access::Granted => {
                 let popout = self.popout_active().then(|| {
                     (
                         f64::from(self.settings.bubble_size.diameter()),
@@ -1319,9 +1430,9 @@ impl Annuncia {
                     }
                 }
             }
-            camera::Access::Undetermined => {
+            Access::Undetermined => {
                 let (tx, rx) = smol::channel::bounded(1);
-                camera::request_access(move |granted| {
+                Permission::Camera.request(move |granted| {
                     let _ = tx.try_send(granted);
                 });
                 cx.spawn(async move |this, cx| {
@@ -1336,11 +1447,11 @@ impl Annuncia {
                 })
                 .detach();
             }
-            camera::Access::Denied => {
+            Access::Denied => {
                 self.camera_failed = true;
                 self.set_notice(
                     "Camera access is off for Annuncia",
-                    Some(("Open Settings".into(), native::CAMERA_SETTINGS_URL)),
+                    Some(("Open Settings".into(), Permission::Camera.settings_url())),
                 );
             }
         }
