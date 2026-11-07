@@ -69,6 +69,8 @@ tccutil reset Camera co.thetylerreiff.Annuncia
 tccutil reset Microphone co.thetylerreiff.Annuncia
 ```
 
+`./scripts/bundle.sh debug` builds a debug bundle named *Annuncia Dev*, with the bundle ID `co.thetylerreiff.Annuncia.dev`, so its permissions stay apart from an installed release or nightly (reset it with that ID). It doesn't update itself.
+
 ### Releasing
 
 Every push and pull request runs the CI workflow: formatting, Clippy and a bundle build.

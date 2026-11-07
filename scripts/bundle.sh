@@ -24,6 +24,18 @@ if [[ "$channel" == nightly ]]; then
   display_version="$version nightly ${ANNUNCIA_BUILD}"
 fi
 
+# Debug bundles are their own app, "Annuncia Dev": macOS keys privacy grants to the bundle ID
+# and signature, so sharing an installed release's ID would leave each with the other's grants.
+# They don't update themselves either, which would swap them for a published build.
+bundle_id="co.thetylerreiff.Annuncia"
+name="Annuncia"
+updates="true"
+if [[ "$profile" != "release" ]]; then
+  bundle_id="co.thetylerreiff.Annuncia.dev"
+  name="Annuncia Dev"
+  updates="false"
+fi
+
 app="target/$profile/Annuncia.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$app/Contents/Frameworks"
@@ -46,9 +58,9 @@ cat > "$app/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>CFBundleIdentifier</key><string>co.thetylerreiff.Annuncia</string>
-  <key>CFBundleName</key><string>Annuncia</string>
-  <key>CFBundleDisplayName</key><string>Annuncia</string>
+  <key>CFBundleIdentifier</key><string>$bundle_id</string>
+  <key>CFBundleName</key><string>$name</string>
+  <key>CFBundleDisplayName</key><string>$name</string>
   <key>CFBundleExecutable</key><string>Annuncia</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
@@ -63,8 +75,8 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>AnnunciaUpdateChannel</key><string>$channel</string>
   <key>SUFeedURL</key><string>https://annuncia.thetylerreiff.co/appcast.xml</string>
   <key>SUPublicEDKey</key><string>ZOkaWi25+g/HEDOZlqbU69ASiOkd6UzdiOrwPYBHDFk=</string>
-  <key>SUEnableAutomaticChecks</key><true/>
-  <key>SUAutomaticallyUpdate</key><true/>
+  <key>SUEnableAutomaticChecks</key><$updates/>
+  <key>SUAutomaticallyUpdate</key><$updates/>
 </dict>
 </plist>
 PLIST
