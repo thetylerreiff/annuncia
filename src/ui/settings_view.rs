@@ -511,37 +511,37 @@ impl SettingsView {
         let update = self.state.read(cx).update_ready.clone()?;
         let state = self.state.clone();
         Some(
+            // Styled like the page rows above it rather than as a card, so it reads as one more
+            // item in the list; the accent glyph is the only thing that calls attention to it.
             div()
+                .id("install-update")
                 .absolute()
-                .bottom(px(12.))
+                .bottom(px(10.))
                 .left(px(10.))
                 .right(px(10.))
                 .flex()
-                .flex_col()
+                .items_center()
                 .gap(px(8.))
-                .p(px(10.))
-                .rounded(px(9.))
-                .bg(theme.surface)
-                .border_1()
-                .border_color(theme.hairline)
+                .px(px(10.))
+                .py(px(6.))
+                .rounded(px(7.))
+                .cursor_pointer()
+                .text_color(theme.text_muted)
+                .hover(|s| s.bg(theme.control).text_color(theme.text))
+                .on_click(move |_, _, cx| state.update(cx, |s, cx| s.install_update(cx)))
+                .child(icon("restart", 14., theme.accent))
                 .child(
                     div()
+                        .min_w_0()
+                        .child(div().text_size(px(13.)).child("Relaunch to update"))
                         .child(
                             div()
-                                .text_size(px(12.5))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child("Update ready"),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(11.5))
+                                .text_size(px(11.))
                                 .text_color(theme.text_muted)
-                                .child(format!("Version {}", update.version)),
+                                .opacity(0.75)
+                                .truncate()
+                                .child(update.version.to_string()),
                         ),
-                )
-                .child(
-                    button("install-update", "Relaunch to Update", true, theme)
-                        .on_click(move |_, _, cx| state.update(cx, |s, cx| s.install_update(cx))),
                 ),
         )
     }

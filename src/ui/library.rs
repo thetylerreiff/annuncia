@@ -1270,10 +1270,27 @@ impl Render for LibraryView {
             .child(div().flex_1())
             .when(self.state.read(cx).update_ready.is_some(), |d| {
                 let state = self.state.clone();
+                // A quiet header control like the cog beside it, not a filled button: only the
+                // accent glyph marks it, matching the row at the foot of Settings' sidebar.
                 d.child(
-                    button("install-update", "Relaunch to Update", true, theme)
+                    div()
+                        .id("install-update")
+                        .h(px(COG))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .px(px(8.))
+                        .rounded(px(7.))
+                        .cursor_pointer()
+                        .whitespace_nowrap()
+                        .text_size(px(12.5))
+                        .text_color(theme.text_muted)
+                        .hover(|s| s.bg(theme.control_hover).text_color(theme.text))
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .on_click(move |_, _, cx| state.update(cx, |s, cx| s.install_update(cx))),
+                        .on_click(move |_, _, cx| state.update(cx, |s, cx| s.install_update(cx)))
+                        .child(icon("restart", 13., theme.accent))
+                        .child("Relaunch to update"),
                 )
             })
             .child(div().w(px(SEARCH_WIDTH + 8.)).flex_none())
