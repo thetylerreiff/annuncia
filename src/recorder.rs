@@ -25,6 +25,10 @@ pub struct WindowChoice {
     pub app: String,
     pub title: String,
     pub frame: TopLeftRect,
+    /// The owning app's process.
+    pub pid: i32,
+    /// The owning app's icon as a PNG, once it has been looked up.
+    pub icon: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug)]
@@ -125,6 +129,8 @@ pub fn list_windows() -> Result<Vec<WindowChoice>> {
                 w: frame.size.width,
                 h: frame.size.height,
             },
+            pid: app.process_id(),
+            icon: None,
         });
     }
     Ok(choices)

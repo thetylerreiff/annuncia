@@ -395,11 +395,18 @@ impl Annuncia {
             CaptureMode::Window => match self.selected_window {
                 Some(window_id) => Target::Window { window_id },
                 None => {
-                    // Nothing picked yet: ask in the panel instead of guessing.
-                    self.show_notice("Pick a window to record", None, cx);
+                    // Nothing picked yet: ask in the panel instead of guessing, opening it if a
+                    // shortcut got us here. It opens on a deferred call, so ask after that.
                     if self.launcher.is_none() {
                         self.toggle_launcher(cx);
                     }
+                    let state = cx.entity();
+                    cx.defer(move |cx| {
+                        if let Some(handle) = state.read(cx).launcher {
+                            let _ =
+                                handle.update(cx, |launcher, _, cx| launcher.ask_for_window(cx));
+                        }
+                    });
                     return;
                 }
             },
@@ -756,7 +763,16 @@ impl Annuncia {
         self.cameras = camera::devices();
         self.microphones = recorder::microphones();
         self.windows_loading = true;
-        let task = cx.background_spawn(async { recorder::list_windows() });
+        // App icons come from AppKit and are written to disk the first time, so they're looked up
+        // here, off the main thread, too.
+        let task = cx.background_spawn(async {
+            recorder::list_windows().map(|mut windows| {
+                for window in &mut windows {
+                    window.icon = native::app_icon(window.pid);
+                }
+                windows
+            })
+        });
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |state, cx| {
@@ -1297,7 +1313,7 @@ impl Annuncia {
         cx.notify();
     }
 
-    fn wants_bubble(&self) -> bool {
+    pub fn wants_bubble(&self) -> bool {
         let showing = self.launcher.is_some()
             || matches!(
                 self.phase,
@@ -1317,6 +1333,11 @@ impl Annuncia {
         if self.launcher.is_none() && !self.phase.is_active() {
             self.bubble_dismissed = false;
         }
+        // A window recording's corner placement lasts for that recording; otherwise the bubble
+        // opens where it was last put.
+        if !self.phase.is_active() {
+            self.bubble_anchor = None;
+        }
 
         let wants_camera =
             self.wants_bubble() && self.settings.camera_enabled && !self.camera_failed;
@@ -1326,13 +1347,25 @@ impl Annuncia {
             self.camera = None;
         }
 
-        // The animated avatar moves with your voice, but only while recording: metering opens
-        // the microphone, and the recording already has it open then.
-        let wants_meter = self.wants_bubble()
+        // Metering opens the microphone, so it runs only where it's seen: the animated avatar
+        // moves with your voice while recording (the recording has the microphone open then),
+        // and the panel shows a meter so a dead microphone is caught before recording. The
+        // panel closes before capture starts, which releases its meter. `MicLevel` never asks
+        // for access.
+        let avatar_meter = self.wants_bubble()
             && !self.settings.camera_enabled
             && self.settings.avatar_image.is_none()
-            && self.settings.mic_enabled
             && matches!(self.phase, Phase::Recording { .. });
+        let panel_meter = self.launcher.is_some() && !self.phase.is_active();
+        let wants_meter = self.settings.mic_enabled && (avatar_meter || panel_meter);
+        // Picking another microphone in the panel meters that one instead.
+        if self
+            .mic_level
+            .as_ref()
+            .is_some_and(|m| m.device() != self.settings.mic_device.as_deref())
+        {
+            self.mic_level = None;
+        }
         if wants_meter && self.mic_level.is_none() {
             self.mic_level = MicLevel::start(self.settings.mic_device.as_deref());
         } else if !wants_meter {

@@ -2,25 +2,31 @@
 
 use std::cell::Cell;
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui::{
     AnyElement, App, AppContext as _, Context, Div, Entity, FocusHandle, Focusable, FontWeight,
-    InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Render, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Window, WindowHandle, canvas, div, hsla,
-    prelude::FluentBuilder as _, px,
+    Hsla, InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Render,
+    ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled as _, Window, WindowHandle,
+    canvas, div, hsla, img, prelude::FluentBuilder as _, px, relative,
 };
 
 use crate::app::{self, Annuncia};
 use crate::native::{self, OverlayLevel, TopLeftRect, WindowSetup};
 use crate::settings::{CaptureMode, tilde};
 use crate::ui::icons::icon;
-use crate::ui::{Theme, keycap};
+use crate::ui::{Theme, keycap, tip};
 
 const WIDTH: f64 = 320.;
 const RADIUS: f64 = 18.;
 /// Corner radius of the module tiles inside the panel.
 const TILE: f32 = 14.;
+/// How often the microphone meter moves on.
+const METER_FRAME: Duration = Duration::from_millis(40);
+/// A microphone that has delivered nothing for this long reads "No signal".
+const SILENCE: Duration = Duration::from_secs(3);
+/// How long the window list lights up when Record is asked for with no window picked.
+const FLASH: Duration = Duration::from_millis(700);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Picker {
@@ -35,6 +41,22 @@ pub struct Launcher {
     origin: (f64, f64),
     /// Window height last applied; the window follows the content's measured height.
     applied: Rc<Cell<f32>>,
+    /// The microphone meter, while the microphone is being metered.
+    meter: Option<Meter>,
+    /// The window list is lit up until then.
+    flash_until: Option<Instant>,
+    window_scroll: ScrollHandle,
+    /// The window list has been stepped through with the arrow keys, so the picked row shows
+    /// focus.
+    keyed: bool,
+}
+
+struct Meter {
+    /// Eased level, 0 to 1.
+    level: f32,
+    /// When the microphone last delivered any sound.
+    heard: Instant,
+    silent: bool,
 }
 
 pub fn open(
@@ -102,6 +124,19 @@ impl Launcher {
             .detach();
         })
         .detach();
+        // The panel first draws before the state knows it's open (and so whether the bubble was
+        // hidden); draw again once it does.
+        cx.defer_in(window, |_, _, cx| cx.notify());
+
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(METER_FRAME).await;
+                if this.update(cx, |this, cx| this.step_meter(cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
 
         Self {
             state,
@@ -109,15 +144,111 @@ impl Launcher {
             picker: None,
             origin,
             applied: Rc::new(Cell::new(0.)),
+            meter: None,
+            flash_until: None,
+            window_scroll: ScrollHandle::new(),
+            keyed: false,
+        }
+    }
+
+    /// Record was asked for in Window mode with no window picked: light up the list to pick
+    /// from.
+    pub fn ask_for_window(&mut self, cx: &mut Context<Self>) {
+        let until = Instant::now() + FLASH;
+        self.flash_until = Some(until);
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(FLASH).await;
+            let _ = this.update(cx, |this, cx| {
+                // A later ask keeps it lit for its own full time.
+                if this.flash_until == Some(until) {
+                    this.flash_until = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Eases the meter toward the microphone's level the way the avatar's pulse does: quick to
+    /// rise with each syllable, slower to fall.
+    fn step_meter(&mut self, cx: &mut Context<Self>) {
+        let reading = self
+            .state
+            .read(cx)
+            .mic_level
+            .as_ref()
+            .map(|m| (m.level(), m.has_signal()));
+        let Some((level, signal)) = reading else {
+            if self.meter.take().is_some() {
+                cx.notify();
+            }
+            return;
+        };
+        let now = Instant::now();
+        let meter = self.meter.get_or_insert(Meter {
+            level: 0.,
+            heard: now,
+            silent: false,
+        });
+        if signal {
+            meter.heard = now;
+        }
+        let rate = if level > meter.level { 0.7 } else { 0.3 };
+        let before = meter.level;
+        meter.level += (level - meter.level) * rate;
+        let silent = now.duration_since(meter.heard) >= SILENCE;
+        if (meter.level - before).abs() > 0.002 || silent != meter.silent {
+            meter.silent = silent;
+            cx.notify();
         }
     }
 
     fn on_key(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
-        match event.keystroke.key.as_str() {
+        let keystroke = &event.keystroke;
+        if keystroke.modifiers.platform {
+            let mode = match keystroke.key.as_str() {
+                "1" => CaptureMode::Screen,
+                "2" => CaptureMode::Window,
+                _ => return,
+            };
+            self.state
+                .update(cx, |s, cx| s.update_settings(cx, |s| s.capture_mode = mode));
+            return;
+        }
+        match keystroke.key.as_str() {
             "escape" => self.state.update(cx, |s, cx| s.close_launcher(cx)),
             "enter" => self.state.update(cx, |s, cx| s.start_recording(cx)),
+            "up" => self.step_window(false, cx),
+            "down" => self.step_window(true, cx),
             _ => {}
         }
+    }
+
+    /// ↑/↓ pick the previous or next window in the list, while it's showing.
+    fn step_window(&mut self, down: bool, cx: &mut Context<Self>) {
+        let state = self.state.read(cx);
+        if state.settings.capture_mode != CaptureMode::Window || state.windows.is_empty() {
+            return;
+        }
+        let last = state.windows.len() - 1;
+        let current = state
+            .selected_window
+            .and_then(|id| state.windows.iter().position(|w| w.id == id));
+        let next = match current {
+            None if down => 0,
+            None => last,
+            Some(i) if down => (i + 1).min(last),
+            Some(i) => i.saturating_sub(1),
+        };
+        let id = state.windows[next].id;
+        self.keyed = true;
+        self.window_scroll.scroll_to_item(next);
+        self.state.update(cx, |s, cx| {
+            s.selected_window = Some(id);
+            cx.notify();
+        });
+        cx.notify();
     }
 }
 
@@ -137,10 +268,17 @@ impl Render for Launcher {
         let mode = settings.capture_mode;
         let handle = self.state.clone();
 
-        let window_subtitle = state
+        let picked = state
             .selected_window
-            .and_then(|id| state.windows.iter().find(|w| w.id == id))
-            .map_or("Pick a window".to_string(), |w| w.app.clone());
+            .and_then(|id| state.windows.iter().find(|w| w.id == id));
+        // In Window mode Record waits for a pick, so say so here, where the pick is made.
+        let (window_subtitle, window_subtitle_color) = match picked {
+            Some(w) => (w.app.clone(), theme.text_muted),
+            None if mode == CaptureMode::Window => {
+                ("Pick a window to record".to_string(), theme.record)
+            }
+            None => ("Pick a window".to_string(), theme.text_muted),
+        };
         let modes = div()
             .flex()
             .gap(px(8.))
@@ -149,6 +287,7 @@ impl Render for Launcher {
                 "display",
                 "Full screen",
                 "Main display".into(),
+                theme.text_muted,
                 mode,
                 theme,
             ))
@@ -157,10 +296,12 @@ impl Render for Launcher {
                 "window",
                 "Window",
                 window_subtitle,
+                window_subtitle_color,
                 mode,
                 theme,
             ));
-        let windows = (mode == CaptureMode::Window).then(|| self.window_list(state, theme));
+        let windows = (mode == CaptureMode::Window)
+            .then(|| self.window_list(state, self.flash_until.is_some(), theme));
 
         let camera_name = settings
             .camera_device
@@ -175,10 +316,43 @@ impl Render for Launcher {
             .or(state.microphones.first())
             .map_or("Default microphone".to_string(), |(_, name)| name.clone());
 
+        // Hidden from the bubble's own control: say so, with a way back.
+        let camera_detail = if bubble_hidden(state) {
+            let handle = handle.clone();
+            div()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .child(device_line("Bubble hidden".into(), theme).min_w_0())
+                .child(
+                    div()
+                        .id("show-bubble")
+                        .flex_none()
+                        .text_size(px(11.5))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(theme.accent_soft)
+                        .cursor_pointer()
+                        .hover(|s| s.text_color(theme.text))
+                        .on_click(move |_, _, cx| {
+                            // Not the device list behind it.
+                            cx.stop_propagation();
+                            handle.update(cx, |s, cx| {
+                                if bubble_hidden(s) {
+                                    // Brings the hidden bubble back first.
+                                    s.toggle_camera(cx);
+                                }
+                            })
+                        })
+                        .child("Show"),
+                )
+                .into_any_element()
+        } else {
+            device_line(camera_name, theme).into_any_element()
+        };
         let camera_tile = self.device_tile(
             "camera",
             "Camera",
-            camera_name,
+            camera_detail,
             settings.camera_enabled,
             Picker::Camera,
             theme,
@@ -198,10 +372,23 @@ impl Render for Launcher {
                 |s, id| s.camera_device = id,
             )
         });
+        // A meter under the name while the microphone is metered, so a silent one shows before
+        // the recording rather than after.
+        let mic_detail = match &self.meter {
+            Some(meter) => div()
+                .child(if meter.silent {
+                    device_line("No signal".into(), theme)
+                } else {
+                    device_line(mic_name, theme)
+                })
+                .child(level_bar(meter.level, theme))
+                .into_any_element(),
+            None => device_line(mic_name, theme).into_any_element(),
+        };
         let mic_tile = self.device_tile(
             "mic",
             "Microphone",
-            mic_name,
+            mic_detail,
             settings.mic_enabled,
             Picker::Microphone,
             theme,
@@ -257,13 +444,14 @@ impl Render for Launcher {
             .text_color(white)
             .text_size(px(13.))
             .font_weight(FontWeight::SEMIBOLD)
-            .cursor_pointer()
-            .hover(|s| s.opacity(0.9))
-            .when(!can_start, |d| d.opacity(0.45))
-            .on_click({
+            // With no window picked it's inert; the Window tile says what's missing.
+            .when(can_start, |d| {
                 let handle = handle.clone();
-                move |_, _, cx| handle.update(cx, |s, cx| s.start_recording(cx))
+                d.cursor_pointer()
+                    .hover(|s| s.opacity(0.9))
+                    .on_click(move |_, _, cx| handle.update(cx, |s, cx| s.start_recording(cx)))
             })
+            .when(!can_start, |d| d.opacity(0.45))
             .child(div().size(px(10.)).rounded_full().bg(white))
             .child("Record")
             .child(keycap(
@@ -286,14 +474,22 @@ impl Render for Launcher {
                     .text_color(theme.text_muted)
                     .child(format!("Saves to {}", tilde(&save_dir))),
             )
-            .child(icon_button("library", "library", theme).on_click({
-                let handle = handle.clone();
-                move |_, _, cx| handle.update(cx, |s, cx| s.open_library(cx))
-            }))
-            .child(icon_button("settings", "gear", theme).on_click({
-                let handle = handle.clone();
-                move |_, _, cx| handle.update(cx, |s, cx| s.open_settings(cx))
-            }));
+            .child(
+                icon_button("library", "library", theme)
+                    .tooltip(tip("Library"))
+                    .on_click({
+                        let handle = handle.clone();
+                        move |_, _, cx| handle.update(cx, |s, cx| s.open_library(cx))
+                    }),
+            )
+            .child(
+                icon_button("settings", "gear", theme)
+                    .tooltip(tip("Settings"))
+                    .on_click({
+                        let handle = handle.clone();
+                        move |_, _, cx| handle.update(cx, |s, cx| s.open_settings(cx))
+                    }),
+            );
 
         let (applied, origin) = (self.applied.clone(), self.origin);
         let content = div()
@@ -369,6 +565,38 @@ fn icon_circle(on: bool, name: &'static str, theme: Theme) -> Div {
         ))
 }
 
+/// The bubble was hidden from its own control. With the panel open, that's the only thing that
+/// keeps it away when there's a camera or avatar to show.
+fn bubble_hidden(state: &Annuncia) -> bool {
+    (state.settings.camera_enabled || state.settings.avatar_enabled) && !state.wants_bubble()
+}
+
+/// The muted line under a device tile's label.
+fn device_line(text: String, theme: Theme) -> Div {
+    div()
+        .text_size(px(11.5))
+        .text_color(theme.text_muted)
+        .truncate()
+        .child(text)
+}
+
+/// A thin accent bar as long as the microphone is loud.
+fn level_bar(level: f32, theme: Theme) -> Div {
+    div()
+        .mt(px(4.))
+        .h(px(3.))
+        .w_full()
+        .rounded_full()
+        .bg(theme.icon_off)
+        .child(
+            div()
+                .h_full()
+                .w(relative(level.clamp(0., 1.)))
+                .rounded_full()
+                .bg(theme.accent),
+        )
+}
+
 fn icon_button(id: &'static str, name: &'static str, theme: Theme) -> gpui::Stateful<Div> {
     div()
         .id(id)
@@ -389,6 +617,7 @@ impl Launcher {
         icon_name: &'static str,
         title: &'static str,
         subtitle: String,
+        subtitle_color: Hsla,
         current: CaptureMode,
         theme: Theme,
     ) -> impl IntoElement {
@@ -420,14 +649,14 @@ impl Launcher {
                     .child(
                         div()
                             .text_size(px(11.5))
-                            .text_color(theme.text_muted)
+                            .text_color(subtitle_color)
                             .truncate()
                             .child(subtitle),
                     ),
             )
     }
 
-    fn window_list(&self, state: &Annuncia, theme: Theme) -> AnyElement {
+    fn window_list(&self, state: &Annuncia, flashing: bool, theme: Theme) -> AnyElement {
         let handle = self.state.clone();
         let list = div()
             .id("windows")
@@ -438,7 +667,9 @@ impl Launcher {
             .gap(px(2.))
             .p(px(4.))
             .rounded(px(TILE))
-            .bg(theme.tile);
+            .bg(theme.tile)
+            .track_scroll(&self.window_scroll)
+            .when(flashing, |d| d.bg(theme.record.opacity(0.18)));
         if state.windows.is_empty() {
             let message = if state.windows_loading {
                 "Finding windows…"
@@ -460,33 +691,53 @@ impl Launcher {
             let selected = state.selected_window == Some(w.id);
             let id = w.id;
             let handle = handle.clone();
+            // The border is always there (clear) so showing focus doesn't shift the row.
             div()
                 .id(SharedString::from(format!("window-{id}")))
-                .px(px(8.))
-                .py(px(6.))
+                .px(px(7.))
+                .py(px(5.))
                 .rounded(px(10.))
+                .border_1()
+                .border_color(if selected && self.keyed {
+                    theme.accent_soft
+                } else {
+                    hsla(0., 0., 0., 0.)
+                })
                 .cursor_pointer()
                 .when(selected, |d| d.bg(theme.accent.opacity(0.22)))
                 .when(!selected, |d| d.hover(|s| s.bg(theme.tile_hover)))
+                .flex()
+                .items_center()
+                .gap(px(8.))
                 .on_click(move |_, _, cx| {
                     handle.update(cx, |s, cx| {
                         s.selected_window = Some(id);
                         cx.notify();
                     })
                 })
+                // An empty square when there's no icon, so the names still line up.
+                .child(match w.icon.clone() {
+                    Some(path) => img(path).size(px(18.)).flex_none().into_any_element(),
+                    None => div().size(px(18.)).flex_none().into_any_element(),
+                })
                 .child(
                     div()
-                        .text_size(px(12.5))
-                        .font_weight(FontWeight::MEDIUM)
-                        .truncate()
-                        .child(w.app.clone()),
-                )
-                .child(
-                    div()
-                        .text_size(px(11.5))
-                        .text_color(theme.text_muted)
-                        .truncate()
-                        .child(w.title.clone()),
+                        .flex_1()
+                        .min_w_0()
+                        .child(
+                            div()
+                                .text_size(px(12.5))
+                                .font_weight(FontWeight::MEDIUM)
+                                .truncate()
+                                .child(w.app.clone()),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.5))
+                                .text_color(theme.text_muted)
+                                .truncate()
+                                .child(w.title.clone()),
+                        ),
                 )
         }))
         .into_any_element()
@@ -498,7 +749,7 @@ impl Launcher {
         &self,
         id: &'static str,
         label: &'static str,
-        device: String,
+        detail: AnyElement,
         enabled: bool,
         picker: Picker,
         theme: Theme,
@@ -508,14 +759,21 @@ impl Launcher {
         let this = this.clone();
         let handle = self.state.clone();
         let open = self.picker == Some(picker);
+        let toggle_tip = format!(
+            "Turn {} {}",
+            label.to_lowercase(),
+            if enabled { "off" } else { "on" }
+        );
+        // The picker half lights up on its own, so the tile reads as two controls.
         tile(theme)
-            .gap(px(10.))
+            .gap(px(4.))
             .pl(px(10.))
             .child(
                 div()
                     .id(SharedString::from(format!("{id}-toggle")))
                     .cursor_pointer()
                     .hover(|s| s.opacity(0.85))
+                    .tooltip(tip(toggle_tip))
                     .on_click(move |_, _, cx| {
                         handle.update(cx, |s, cx| s.update_settings(cx, &flip))
                     })
@@ -530,8 +788,11 @@ impl Launcher {
                     .items_center()
                     .gap(px(8.))
                     .py(px(9.))
+                    .pl(px(6.))
                     .pr(px(10.))
+                    .rounded(px(TILE))
                     .cursor_pointer()
+                    .hover(|s| s.bg(theme.tile_hover))
                     .on_click(move |_, _, cx| {
                         this.update(cx, |this, cx| {
                             this.picker = if open { None } else { Some(picker) };
@@ -548,13 +809,7 @@ impl Launcher {
                                     .font_weight(FontWeight::MEDIUM)
                                     .child(label),
                             )
-                            .child(
-                                div()
-                                    .text_size(px(11.5))
-                                    .text_color(theme.text_muted)
-                                    .truncate()
-                                    .child(device),
-                            ),
+                            .child(detail),
                     )
                     .child(icon(
                         if open {
@@ -612,7 +867,7 @@ impl Launcher {
                     })
                     .child(div().truncate().child(name))
                     .when(is_selected, |d| {
-                        d.child(div().text_color(theme.accent).child("✓"))
+                        d.child(div().text_color(theme.accent_soft).child("✓"))
                     })
             }))
             .into_any_element()

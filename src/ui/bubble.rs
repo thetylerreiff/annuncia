@@ -3,8 +3,9 @@ use std::time::{Duration, Instant};
 
 use gpui::{
     App, AppContext as _, Bounds, Context, Entity, Hsla, InteractiveElement as _, IntoElement,
-    MouseButton, ObjectFit, ParentElement as _, Render, Styled as _, StyledImage as _, Window,
-    WindowHandle, canvas, div, fill, hsla, img, point, px, rgb, size, surface,
+    MouseButton, MouseDownEvent, ObjectFit, ParentElement as _, Render, Styled as _,
+    StyledImage as _, Window, WindowHandle, canvas, div, fill, hsla, img, point, px, rgb, size,
+    surface,
 };
 use objc2::rc::Retained;
 use objc2_core_foundation::CFRetained;
@@ -16,6 +17,7 @@ use crate::camera::FrameSlot;
 use crate::native::{self, OverlayLevel, TopLeftRect};
 use crate::orb;
 use crate::popout::{HEADROOM, PopoutSlot};
+use crate::settings::BubblePosition;
 
 pub struct Bubble {
     state: Entity<Annuncia>,
@@ -38,7 +40,8 @@ struct Popout {
     seen: u64,
 }
 
-/// `anchor` places the circle; the pop-out bubble's window extends above it for the head.
+/// `anchor` places the circle (otherwise it goes where it was last dropped); the pop-out
+/// bubble's window extends above it for the head.
 pub fn open(
     state: Entity<Annuncia>,
     diameter: f32,
@@ -49,13 +52,36 @@ pub fn open(
     let geometry = native::menu_bar_geometry()?;
     let d = f64::from(diameter);
     let margin = 40.;
-    let circle = anchor.unwrap_or(TopLeftRect {
-        x: geometry.screen.x + margin,
-        y: geometry.screen.y + geometry.screen.h - d - margin,
-        w: d,
-        h: d,
-    });
+    let saved = state.read(cx).settings.bubble_position;
+    let circle = match (anchor, saved, native::visible_frame(None)) {
+        (Some(anchor), _, _) => anchor,
+        (None, Some(saved), Some(visible)) => TopLeftRect {
+            x: visible.x + saved.x * (visible.w - d),
+            y: visible.y + saved.y * (visible.h - d),
+            w: d,
+            h: d,
+        },
+        _ => TopLeftRect {
+            x: geometry.screen.x + margin,
+            y: geometry.screen.y + geometry.screen.h - d - margin,
+            w: d,
+            h: d,
+        },
+    };
     let headroom = if popout { d * HEADROOM } else { 0. };
+    // Keep it all on screen, head room included: the target window's corner, or a spot saved
+    // on a larger display, may not be.
+    let circle = match native::visible_frame(Some(circle)) {
+        Some(visible) => TopLeftRect {
+            x: circle.x.min(visible.x + visible.w - d).max(visible.x),
+            y: circle
+                .y
+                .min(visible.y + visible.h - d)
+                .max(visible.y + headroom),
+            ..circle
+        },
+        None => circle,
+    };
     let rect = TopLeftRect {
         y: circle.y - headroom,
         h: circle.h + headroom,
@@ -236,9 +262,7 @@ impl Render for Bubble {
                 .size_full()
                 .relative()
                 .cursor_grab()
-                .on_mouse_down(MouseButton::Left, |_, window, _| {
-                    native::begin_window_drag(window)
-                })
+                .on_mouse_down(MouseButton::Left, drag(&self.state))
                 .child(hide);
         }
 
@@ -274,9 +298,7 @@ impl Render for Bubble {
                 hsla(0., 0., 0.08, 1.)
             })
             .cursor_grab()
-            .on_mouse_down(MouseButton::Left, |_, window, _| {
-                native::begin_window_drag(window)
-            })
+            .on_mouse_down(MouseButton::Left, drag(&self.state))
             .child(content)
             .child(
                 div()
@@ -288,6 +310,58 @@ impl Render for Bubble {
             )
             .child(hide)
     }
+}
+
+/// Drags the bubble's window with the pointer, then remembers where it was dropped.
+fn drag(state: &Entity<Annuncia>) -> impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static {
+    let state = state.clone();
+    move |_, window, cx| {
+        let start = native::frame(window);
+        native::begin_window_drag(window);
+        let (state, handle) = (state.clone(), window.window_handle());
+        // AppKit runs the drag itself, so GPUI never hears the button come up; watch for it.
+        cx.spawn(async move |cx| {
+            while native::mouse_is_down() {
+                cx.background_executor()
+                    .timer(Duration::from_millis(50))
+                    .await;
+            }
+            let _ = handle.update(cx, |_, window, cx| {
+                let Some(frame) = native::frame(window).filter(|f| Some(*f) != start) else {
+                    return;
+                };
+                if let Some(position) = position(frame) {
+                    state.update(cx, |s, cx| {
+                        s.update_settings(cx, |s| s.bubble_position = Some(position))
+                    });
+                }
+            });
+        })
+        .detach();
+    }
+}
+
+/// Where the bubble's window `frame` sits in the room its screen leaves the circle.
+fn position(frame: TopLeftRect) -> Option<BubblePosition> {
+    // The circle is the bottom of the window; the pop-out bubble's head room is above it.
+    let d = frame.w;
+    let circle = TopLeftRect {
+        y: frame.y + frame.h - d,
+        h: d,
+        ..frame
+    };
+    let visible = native::visible_frame(Some(circle))?;
+    let fraction = |at: f64, start: f64, room: f64| {
+        if room > 0. {
+            ((at - start) / room).clamp(0., 1.)
+        } else {
+            0.
+        }
+    };
+    Some(BubblePosition {
+        x: fraction(circle.x, visible.x, visible.w - d),
+        y: fraction(circle.y, visible.y, visible.h - d),
+    })
 }
 
 /// The app icon's ink, under the avatar's three lighter tones, darkest to silver.
