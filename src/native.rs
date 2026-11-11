@@ -410,12 +410,15 @@ pub fn open_login_items_settings() {
     unsafe { objc2_service_management::SMAppService::openSystemSettingsLoginItems() };
 }
 
-/// Moves a file to the Trash rather than deleting it outright; returns whether it did.
-pub fn trash(path: &Path) -> bool {
+/// Moves a file to the Trash rather than deleting it outright; returns where it went (the
+/// Trash renames files whose names are taken), or `None` if it didn't.
+pub fn trash(path: &Path) -> Option<std::path::PathBuf> {
     let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+    let mut resulting = None;
     NSFileManager::defaultManager()
-        .trashItemAtURL_resultingItemURL_error(&url, None)
-        .is_ok()
+        .trashItemAtURL_resultingItemURL_error(&url, Some(&mut resulting))
+        .ok()?;
+    Some(resulting?.path()?.to_string().into())
 }
 
 /// Hands the current mouse-down to the window server so a borderless window can be dragged.

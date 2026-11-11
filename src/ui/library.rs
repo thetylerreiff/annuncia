@@ -6,7 +6,7 @@ use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Local, NaiveDateTime, TimeZone as _};
 use gpui::{
@@ -41,6 +41,8 @@ const SEARCH_WIDTH: f32 = 260.;
 const COG: f32 = 28.;
 /// Matches listed per recording before "and N more".
 const SHOWN_MATCHES: usize = 3;
+/// How long Undo stays offered after a Trash.
+const UNDO_FOR: Duration = Duration::from_secs(6);
 
 pub struct LibraryView {
     state: Entity<Annuncia>,
@@ -70,6 +72,15 @@ pub struct LibraryView {
     grid_scroll: ScrollHandle,
     /// Cards per row at the last layout, for the up and down arrows.
     columns: usize,
+    /// Recordings just moved to the Trash, while Undo is offered.
+    undo: Option<Undo>,
+}
+
+struct Undo {
+    /// Each recording's library entry and where its file went in the Trash.
+    trashed: Vec<(Entry, PathBuf)>,
+    /// Lets the timer that hides the bar tell whether it's still the same one.
+    shown: Instant,
 }
 
 /// How a click or arrow key changes the selection.
@@ -217,6 +228,7 @@ pub fn open(
                 cursor: None,
                 grid_scroll: ScrollHandle::new(),
                 columns: 1,
+                undo: None,
             }
         })
     })
@@ -321,6 +333,10 @@ impl LibraryView {
         }
         // Settings handles its own keys.
         if self.settings.is_some() {
+            return;
+        }
+        if ks.modifiers.platform && ks.key == "z" && self.undo.is_some() {
+            self.undo_trash(cx);
             return;
         }
         if self.menu.is_some() && ks.key == "escape" {
@@ -787,15 +803,72 @@ impl LibraryView {
     }
 
     fn trash(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        let mut trashed = Vec::new();
         for path in &paths {
+            let entry = self
+                .items
+                .iter()
+                .find(|i| &i.entry.path == path)
+                .map(|i| i.entry.clone());
             match self.state.update(cx, |s, cx| s.trash_recording(path, cx)) {
-                Ok(()) => {
+                Ok(to) => {
                     if self.detail.as_ref().is_some_and(|d| &d.path == path) {
                         self.close_detail(cx);
                     }
+                    trashed.extend(entry.map(|e| (e, to)));
                 }
                 Err(err) => self.report(err),
             }
+        }
+        if !trashed.is_empty() {
+            self.offer_undo(trashed, cx);
+        }
+        cx.notify();
+    }
+
+    /// Shows the Undo bar for a few seconds. Trashing more while it's up adds to it, so Undo
+    /// brings back everything that went.
+    fn offer_undo(&mut self, trashed: Vec<(Entry, PathBuf)>, cx: &mut Context<Self>) {
+        let shown = Instant::now();
+        let mut all = self.undo.take().map(|u| u.trashed).unwrap_or_default();
+        all.extend(trashed);
+        self.undo = Some(Undo {
+            trashed: all,
+            shown,
+        });
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(UNDO_FOR).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.undo.as_ref().is_some_and(|u| u.shown == shown) {
+                    this.undo = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Puts the recordings in the Undo bar back, and selects them.
+    fn undo_trash(&mut self, cx: &mut Context<Self>) {
+        let Some(undo) = self.undo.take() else {
+            return;
+        };
+        self.error = None;
+        let mut restored = Vec::new();
+        for (entry, from) in undo.trashed {
+            let path = entry.path.clone();
+            match self
+                .state
+                .update(cx, |s, cx| s.restore_recording(entry, &from, cx))
+            {
+                Ok(()) => restored.push(path),
+                Err(err) => self.report(err),
+            }
+        }
+        if let Some(first) = restored.first() {
+            self.anchor = Some(first.clone());
+            self.cursor = Some(first.clone());
+            self.selection = restored;
         }
         cx.notify();
     }
@@ -1430,6 +1503,57 @@ impl LibraryView {
 }
 
 impl LibraryView {
+    /// "Moved … to the Trash" [Undo], floating at the bottom of the window.
+    fn undo_bar(&self, theme: Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let undo = self.undo.as_ref()?;
+        let message = match undo.trashed.as_slice() {
+            [(entry, _)] => format!(
+                "Moved “{}” to the Trash",
+                full_title(&entry.path, entry.created)
+            ),
+            all => format!("Moved {} recordings to the Trash", all.len()),
+        };
+        Some(
+            div()
+                .absolute()
+                .left_0()
+                .right_0()
+                .bottom(px(20.))
+                .flex()
+                .justify_center()
+                .child(
+                    div()
+                        .id("undo-bar")
+                        .occlude()
+                        .max_w(px(520.))
+                        .flex()
+                        .items_center()
+                        .gap(px(14.))
+                        .pl(px(16.))
+                        .pr(px(6.))
+                        .py(px(6.))
+                        .rounded(px(10.))
+                        .bg(theme.surface)
+                        .border_1()
+                        .border_color(theme.hairline)
+                        .shadow_lg()
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(px(13.))
+                                .text_color(theme.text)
+                                .child(message),
+                        )
+                        .child(
+                            button("undo", "Undo", false, theme)
+                                .on_click(cx.listener(|this, _, _, cx| this.undo_trash(cx))),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
     /// The open menu, drawn over everything at the point it was opened from.
     fn menu_popover(&self, theme: Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
         let menu = self.menu.as_ref()?;
@@ -1696,10 +1820,12 @@ impl Render for LibraryView {
             return root.child(settings.clone());
         }
         let menu = self.menu_popover(theme, cx);
+        let undo = self.undo_bar(theme, cx);
         if self.detail.is_some() {
             return root
                 .child(self.detail_header(theme, cx))
                 .child(self.detail_body(theme, cx))
+                .children(undo)
                 .children(menu);
         }
         let available = f32::from(window.viewport_size().width) - PADDING * 2.;
@@ -1854,7 +1980,7 @@ impl Render for LibraryView {
                 .into_any_element()
         };
 
-        root.child(header).child(body).children(menu)
+        root.child(header).child(body).children(undo).children(menu)
     }
 }
 
