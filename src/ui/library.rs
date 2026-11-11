@@ -365,12 +365,16 @@ impl LibraryView {
         if self.settings.is_some() {
             return;
         }
+        // Any key closes the menu, so it can't act on a selection the key changed. Esc does
+        // nothing more.
+        if self.menu.is_some() {
+            self.close_menu(cx);
+            if ks.key == "escape" {
+                return;
+            }
+        }
         if ks.modifiers.platform && ks.key == "z" && self.undo.is_some() {
             self.undo_trash(cx);
-            return;
-        }
-        if self.menu.is_some() && ks.key == "escape" {
-            self.close_menu(cx);
             return;
         }
         if ks.modifiers.platform && ks.key == "f" {
@@ -594,9 +598,12 @@ impl LibraryView {
         }
     }
 
-    /// Moves the selected recordings to the Trash and selects the one after them.
     fn trash_selection(&mut self, cx: &mut Context<Self>) {
-        let paths = self.selected_paths();
+        self.trash_and_select_next(self.selected_paths(), cx);
+    }
+
+    /// Moves `paths` to the Trash and selects the recording after them.
+    fn trash_and_select_next(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
         if paths.is_empty() {
             return;
         }
@@ -634,6 +641,7 @@ impl LibraryView {
         if let Some(detail) = &self.detail {
             detail.player.pause();
         }
+        self.menu = None;
         native::focus_search_field(window, None);
         let view = match &self.settings {
             Some((view, _)) => view.clone(),
@@ -677,6 +685,7 @@ impl LibraryView {
         let Some(mtm) = MainThreadMarker::new() else {
             return;
         };
+        self.menu = None;
         // Keys go to the player, not the search field it hides.
         native::focus_search_field(window, None);
         window.focus(&self.focus);
@@ -720,6 +729,11 @@ impl LibraryView {
             let hidden = self.detail.is_some() || self.settings.is_some();
             if field.isHidden() != hidden {
                 field.setHidden(hidden);
+            }
+            // Clicking into the field takes the keys; the menu goes with them.
+            if self.menu.is_some() && field.currentEditor().is_some() {
+                self.menu = None;
+                cx.notify();
             }
             let query = field.stringValue().to_string();
             if query != self.query {
@@ -1140,8 +1154,7 @@ impl LibraryView {
             Action::Transcribe | Action::TranscribeAgain => self.retranscribe(path, cx),
             Action::Reveal => native::reveal_all_in_finder(&menu.paths),
             Action::Rename => self.rename(path, window, cx),
-            Action::Trash if self.detail.is_none() => self.trash_selection(cx),
-            Action::Trash => self.trash(menu.paths, cx),
+            Action::Trash => self.trash_and_select_next(menu.paths, cx),
         }
         cx.notify();
     }
