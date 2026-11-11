@@ -124,6 +124,9 @@ impl Launcher {
             .detach();
         })
         .detach();
+        // The panel first draws before the state knows it's open (and so whether the bubble was
+        // hidden); draw again once it does.
+        cx.defer_in(window, |_, _, cx| cx.notify());
 
         cx.spawn(async move |this, cx| {
             loop {
@@ -313,10 +316,43 @@ impl Render for Launcher {
             .or(state.microphones.first())
             .map_or("Default microphone".to_string(), |(_, name)| name.clone());
 
+        // Hidden from the bubble's own control: say so, with a way back.
+        let camera_detail = if bubble_hidden(state) {
+            let handle = handle.clone();
+            div()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .child(device_line("Bubble hidden".into(), theme).min_w_0())
+                .child(
+                    div()
+                        .id("show-bubble")
+                        .flex_none()
+                        .text_size(px(11.5))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(theme.accent_soft)
+                        .cursor_pointer()
+                        .hover(|s| s.text_color(theme.text))
+                        .on_click(move |_, _, cx| {
+                            // Not the device list behind it.
+                            cx.stop_propagation();
+                            handle.update(cx, |s, cx| {
+                                if bubble_hidden(s) {
+                                    // Brings the hidden bubble back first.
+                                    s.toggle_camera(cx);
+                                }
+                            })
+                        })
+                        .child("Show"),
+                )
+                .into_any_element()
+        } else {
+            device_line(camera_name, theme).into_any_element()
+        };
         let camera_tile = self.device_tile(
             "camera",
             "Camera",
-            device_line(camera_name, theme).into_any_element(),
+            camera_detail,
             settings.camera_enabled,
             Picker::Camera,
             theme,
@@ -527,6 +563,12 @@ fn icon_circle(on: bool, name: &'static str, theme: Theme) -> Div {
             15.,
             if on { theme.accent_text } else { theme.text },
         ))
+}
+
+/// The bubble was hidden from its own control. With the panel open, that's the only thing that
+/// keeps it away when there's a camera or avatar to show.
+fn bubble_hidden(state: &Annuncia) -> bool {
+    (state.settings.camera_enabled || state.settings.avatar_enabled) && !state.wants_bubble()
 }
 
 /// The muted line under a device tile's label.

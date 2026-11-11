@@ -1313,7 +1313,7 @@ impl Annuncia {
         cx.notify();
     }
 
-    fn wants_bubble(&self) -> bool {
+    pub fn wants_bubble(&self) -> bool {
         let showing = self.launcher.is_some()
             || matches!(
                 self.phase,
