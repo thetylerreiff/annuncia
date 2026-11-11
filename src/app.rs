@@ -1333,6 +1333,11 @@ impl Annuncia {
         if self.launcher.is_none() && !self.phase.is_active() {
             self.bubble_dismissed = false;
         }
+        // A window recording's corner placement lasts for that recording; otherwise the bubble
+        // opens where it was last put.
+        if !self.phase.is_active() {
+            self.bubble_anchor = None;
+        }
 
         let wants_camera =
             self.wants_bubble() && self.settings.camera_enabled && !self.camera_failed;

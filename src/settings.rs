@@ -45,6 +45,15 @@ impl BubbleSize {
     }
 }
 
+/// Where the camera bubble was last dropped: how far across the room the screen leaves it
+/// (0 at the left or top edge, 1 at the right or bottom), so it lands in the same place on any
+/// display and at any size.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BubblePosition {
+    pub x: f64,
+    pub y: f64,
+}
+
 /// Global shortcuts, stored in the `global-hotkey` string format (e.g. `alt+shift+KeyR`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -99,6 +108,8 @@ pub struct Settings {
     pub codec: Codec,
     pub countdown_secs: u32,
     pub bubble_size: BubbleSize,
+    /// Unset until the bubble is first moved; it then reopens there.
+    pub bubble_position: Option<BubblePosition>,
     /// Shown in the bubble when the camera is off.
     pub avatar_image: Option<PathBuf>,
     /// With the camera off, show the avatar (that photo, or smoke that moves with your voice)
@@ -143,6 +154,7 @@ impl Default for Settings {
             codec: Codec::H264,
             countdown_secs: 3,
             bubble_size: BubbleSize::Medium,
+            bubble_position: None,
             avatar_image: None,
             avatar_enabled: true,
             bubble_popout: false,

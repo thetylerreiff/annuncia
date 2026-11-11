@@ -553,3 +553,23 @@ pub fn app_icon(pid: i32) -> Option<std::path::PathBuf> {
     png.writeToFile_atomically(&NSString::from_str(&path.to_string_lossy()), true)
         .then_some(path)
 }
+
+/// The visible part (without the menu bar and Dock) of the screen holding `rect`'s centre, or
+/// of the main screen.
+pub fn visible_frame(rect: Option<TopLeftRect>) -> Option<TopLeftRect> {
+    let mtm = mtm();
+    let holding = rect.and_then(|r| {
+        let (x, y) = (r.x + r.w / 2., r.y + r.h / 2.);
+        NSScreen::screens(mtm).iter().find(|screen| {
+            let f = from_cocoa(screen.frame());
+            x >= f.x && x < f.x + f.w && y >= f.y && y < f.y + f.h
+        })
+    });
+    let screen = holding.or_else(|| NSScreen::mainScreen(mtm))?;
+    Some(from_cocoa(screen.visibleFrame()))
+}
+
+/// Whether a mouse button is held, e.g. while AppKit runs a window drag.
+pub fn mouse_is_down() -> bool {
+    NSEvent::pressedMouseButtons() != 0
+}
