@@ -70,6 +70,18 @@ impl Library {
         }
     }
 
+    /// Puts back a recording that was removed, in its place by date.
+    pub fn restore(&mut self, entry: Entry) {
+        self.recordings.retain(|e| e.path != entry.path);
+        let at = self
+            .recordings
+            .iter()
+            .position(|e| e.created < entry.created)
+            .unwrap_or(self.recordings.len());
+        self.recordings.insert(at, entry);
+        self.save();
+    }
+
     pub fn remove(&mut self, path: &Path) {
         self.recordings.retain(|e| e.path != path);
         self.save();

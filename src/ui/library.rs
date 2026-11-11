@@ -6,23 +6,24 @@ use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Local, NaiveDateTime, TimeZone as _};
 use gpui::{
-    AnyElement, App, AppContext as _, Bounds, Context, Entity, FocusHandle, Focusable, FontWeight,
-    HighlightStyle, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton,
-    MouseDownEvent, MouseMoveEvent, ObjectFit, ParentElement as _, Pixels, Render, ScrollHandle,
-    SharedString, StatefulInteractiveElement as _, Styled as _, StyledImage as _, StyledText,
-    Subscription, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle,
-    WindowOptions, canvas, div, hsla, img, prelude::FluentBuilder as _, px, relative, size,
-    surface,
+    AnyElement, App, AppContext as _, Bounds, ClickEvent, Context, Entity, FocusHandle, Focusable,
+    FontWeight, HighlightStyle, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton,
+    MouseDownEvent, MouseMoveEvent, ObjectFit, ParentElement as _, Pixels, Point, Render,
+    ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled as _, StyledImage as _,
+    StyledText, Subscription, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds,
+    WindowHandle, WindowOptions, anchored, canvas, deferred, div, hsla, img,
+    prelude::FluentBuilder as _, px, relative, size, surface,
 };
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2_app_kit::NSSearchField;
 
 use crate::app::{self, Annuncia, TranscriptState};
+use crate::hotkeys;
 use crate::library::{self, Entry};
 use crate::native;
 use crate::player::Player;
@@ -30,7 +31,7 @@ use crate::transcript::{Transcript, timestamp};
 use crate::ui::icons::icon;
 use crate::ui::settings_view::{self, SettingsView};
 use crate::ui::transcript_view::{self, dithered_note, paragraph_of};
-use crate::ui::{Theme, button};
+use crate::ui::{Theme, button, tip};
 
 const PADDING: f32 = 24.;
 const GAP: f32 = 16.;
@@ -39,8 +40,31 @@ const HEADER: f32 = 52.;
 const SEARCH_WIDTH: f32 = 260.;
 /// The settings cog at the header's right end, beside the search field.
 const COG: f32 = 28.;
-/// Matches listed per recording before "and N more".
+/// Matches listed per recording before "Show N more".
 const SHOWN_MATCHES: usize = 3;
+/// How long Undo stays offered after a Trash.
+const UNDO_FOR: Duration = Duration::from_secs(6);
+/// The speeds the player's speed button cycles through.
+const SPEEDS: [f32; 4] = [1., 1.25, 1.5, 2.];
+const VOLUME_WIDTH: f32 = 64.;
+
+/// The player's speed, volume and mute, kept for the session from one recording to the next.
+#[derive(Clone, Copy)]
+struct Playback {
+    speed: f32,
+    volume: f32,
+    muted: bool,
+}
+
+thread_local! {
+    static PLAYBACK: Cell<Playback> = const {
+        Cell::new(Playback {
+            speed: 1.,
+            volume: 1.,
+            muted: false,
+        })
+    };
+}
 
 pub struct LibraryView {
     state: Entity<Annuncia>,
@@ -55,8 +79,80 @@ pub struct LibraryView {
     /// Native, since GPUI has no text input; installed once the window exists.
     search: Option<Retained<NSSearchField>>,
     query: String,
+    /// Search results showing all their matches, not just the first few.
+    expanded: Vec<PathBuf>,
     /// Settings, while the window shows it instead of the recordings.
     settings: Option<(Entity<SettingsView>, Subscription)>,
+    /// The right-click (or "⋯") menu, while it's open.
+    menu: Option<Menu>,
+    /// Why the last rename or Trash from the grid didn't happen.
+    error: Option<SharedString>,
+    /// The selected recordings in the grid.
+    selection: Vec<PathBuf>,
+    /// Where ⇧-click and ⇧-arrow selections start from.
+    anchor: Option<PathBuf>,
+    /// The recording the arrow keys move from: the last one clicked or moved to.
+    cursor: Option<PathBuf>,
+    grid_scroll: ScrollHandle,
+    /// Cards per row at the last layout, for the up and down arrows.
+    columns: usize,
+    /// Recordings just moved to the Trash, while Undo is offered.
+    undo: Option<Undo>,
+}
+
+struct Undo {
+    /// Each recording's library entry and where its file went in the Trash.
+    trashed: Vec<(Entry, PathBuf)>,
+    /// Lets the timer that hides the bar tell whether it's still the same one.
+    shown: Instant,
+}
+
+/// How a click or arrow key changes the selection.
+#[derive(Clone, Copy)]
+enum Select {
+    Only,
+    /// ⌘: add or remove one.
+    Toggle,
+    /// ⇧: everything from the anchor.
+    Range,
+}
+
+/// A small popover of actions on one or more recordings.
+struct Menu {
+    paths: Vec<PathBuf>,
+    /// Where its top-left corner goes, in window coordinates.
+    at: Point<Pixels>,
+    /// `None` draws a separator.
+    actions: Vec<Option<Action>>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Action {
+    Open,
+    Edit,
+    CopyFile,
+    CopyTranscript,
+    Transcribe,
+    TranscribeAgain,
+    Reveal,
+    Rename,
+    Trash,
+}
+
+impl Action {
+    fn label(self) -> &'static str {
+        match self {
+            Action::Open => "Open",
+            Action::Edit => "Edit",
+            Action::CopyFile => "Copy file",
+            Action::CopyTranscript => "Copy transcript",
+            Action::Transcribe => "Transcribe",
+            Action::TranscribeAgain => "Transcribe again",
+            Action::Reveal => "Show in Finder",
+            Action::Rename => "Rename…",
+            Action::Trash => "Move to Trash",
+        }
+    }
 }
 
 struct Detail {
@@ -66,6 +162,11 @@ struct Detail {
     /// The scrubber's bounds, measured as it paints.
     bar: Rc<Cell<Option<Bounds<Pixels>>>>,
     scrubbing: bool,
+    /// The volume slider's bounds, measured as it paints.
+    volume_bar: Rc<Cell<Option<Bounds<Pixels>>>>,
+    adjusting_volume: bool,
+    /// Set by a frame step, which moves the player while it's paused: follow it.
+    stepped: bool,
     transcript_scroll: ScrollHandle,
     /// The paragraph the transcript last scrolled to while following playback.
     followed_paragraph: Option<usize>,
@@ -133,7 +234,7 @@ pub fn open(
             cx.defer_in(window, |this: &mut LibraryView, window, _| {
                 this.search = native::install_search_field(
                     window,
-                    "Search transcripts",
+                    "Search recordings",
                     f64::from(SEARCH_WIDTH),
                     f64::from((HEADER - 24.) / 2.),
                     f64::from(PADDING + COG + 8.),
@@ -148,7 +249,16 @@ pub fn open(
                 detail: None,
                 search: None,
                 query: String::new(),
+                expanded: Vec::new(),
                 settings: None,
+                menu: None,
+                error: None,
+                selection: Vec::new(),
+                anchor: None,
+                cursor: None,
+                grid_scroll: ScrollHandle::new(),
+                columns: 1,
+                undo: None,
             }
         })
     })
@@ -193,6 +303,15 @@ impl LibraryView {
                 }
             })
             .collect();
+        let items = &self.items;
+        let exists = |p: &PathBuf| items.iter().any(|i| &i.entry.path == p);
+        self.selection.retain(exists);
+        if !self.anchor.as_ref().is_some_and(exists) {
+            self.anchor = None;
+        }
+        if !self.cursor.as_ref().is_some_and(exists) {
+            self.cursor = None;
+        }
         let paths: Vec<PathBuf> = self.items.iter().map(|i| i.entry.path.clone()).collect();
         cx.spawn(async move |this, cx| {
             for path in paths {
@@ -246,8 +365,28 @@ impl LibraryView {
         if self.settings.is_some() {
             return;
         }
-        if ks.modifiers.platform && ks.key == "f" && self.detail.is_none() {
+        if ks.modifiers.platform && ks.key == "z" && self.undo.is_some() {
+            self.undo_trash(cx);
+            return;
+        }
+        if self.menu.is_some() && ks.key == "escape" {
+            self.close_menu(cx);
+            return;
+        }
+        if ks.modifiers.platform && ks.key == "f" {
+            // From a recording too: back to the grid, to search.
+            if self.detail.is_some() {
+                self.close_detail(cx);
+            }
+            if let Some(field) = &self.search {
+                field.setHidden(false);
+            }
             native::focus_search_field(window, self.search.as_deref());
+            return;
+        }
+        // The grid's keys, while it shows (not search results).
+        if self.detail.is_none() && self.query.trim().is_empty() {
+            self.on_grid_key(event, window, cx);
             return;
         }
         if self.detail.is_none() || ks.modifiers.platform || ks.modifiers.control {
@@ -258,8 +397,231 @@ impl LibraryView {
             "space" => self.toggle_play(cx),
             "left" => self.skip(-5., cx),
             "right" => self.skip(5., cx),
+            "," => self.step(-1, cx),
+            "." => self.step(1, cx),
+            "j" => self.play_backwards(cx),
+            "k" => {
+                if let Some(detail) = &self.detail {
+                    detail.player.pause();
+                    cx.notify();
+                }
+            }
+            "l" => self.play_forwards(cx),
             _ => {}
         }
+    }
+
+    fn on_grid_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let ks = &event.keystroke;
+        if ks.modifiers.control || ks.modifiers.alt {
+            return;
+        }
+        let key = ks.key.as_str();
+        if ks.modifiers.platform {
+            match key {
+                "a" => {
+                    self.selection = self.items.iter().map(|i| i.entry.path.clone()).collect();
+                    cx.notify();
+                }
+                // Finder's ⌘⌫.
+                "backspace" => self.trash_selection(cx),
+                _ => {}
+            }
+            return;
+        }
+        match key {
+            "left" | "right" | "up" | "down" => self.move_cursor(key, ks.modifiers.shift, cx),
+            "enter" | "space" => {
+                if let Some(path) = self.cursor_or_first_selected() {
+                    self.open_detail(path, 0., key == "space", window, cx);
+                }
+            }
+            "backspace" | "delete" => self.trash_selection(cx),
+            "escape" => {
+                self.selection.clear();
+                cx.notify();
+            }
+            _ => {}
+        }
+    }
+
+    fn cursor_or_first_selected(&self) -> Option<PathBuf> {
+        self.cursor
+            .clone()
+            .filter(|c| self.selection.contains(c))
+            .or_else(|| self.selected_paths().into_iter().next())
+    }
+
+    /// The selection, in grid order.
+    fn selected_paths(&self) -> Vec<PathBuf> {
+        self.items
+            .iter()
+            .map(|i| &i.entry.path)
+            .filter(|p| self.selection.contains(p))
+            .cloned()
+            .collect()
+    }
+
+    fn select(&mut self, index: usize, how: Select, cx: &mut Context<Self>) {
+        let Some(path) = self.items.get(index).map(|i| i.entry.path.clone()) else {
+            return;
+        };
+        match how {
+            Select::Only => {
+                self.selection = vec![path.clone()];
+                self.anchor = Some(path.clone());
+            }
+            Select::Toggle => {
+                if let Some(i) = self.selection.iter().position(|p| *p == path) {
+                    self.selection.remove(i);
+                } else {
+                    self.selection.push(path.clone());
+                }
+                self.anchor = Some(path.clone());
+            }
+            Select::Range => {
+                let from = self
+                    .anchor
+                    .as_ref()
+                    .and_then(|a| self.items.iter().position(|i| &i.entry.path == a))
+                    .unwrap_or(index);
+                self.selection = self.items[from.min(index)..=from.max(index)]
+                    .iter()
+                    .map(|i| i.entry.path.clone())
+                    .collect();
+                if self.anchor.is_none() {
+                    self.anchor = Some(path.clone());
+                }
+            }
+        }
+        self.cursor = Some(path);
+        cx.notify();
+    }
+
+    fn on_card_click(
+        &mut self,
+        index: usize,
+        event: &ClickEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Keys go to the grid, not the search field.
+        native::focus_search_field(window, None);
+        window.focus(&self.focus);
+        let modifiers = event.modifiers();
+        if modifiers.platform {
+            self.select(index, Select::Toggle, cx);
+        } else if modifiers.shift {
+            self.select(index, Select::Range, cx);
+        } else if event.click_count() >= 2 {
+            if let Some(path) = self.items.get(index).map(|i| i.entry.path.clone()) {
+                self.open_detail(path, 0., false, window, cx);
+            }
+        } else {
+            self.select(index, Select::Only, cx);
+        }
+    }
+
+    /// The grid as laid out: each day's recordings (item indices), in rows of `columns`.
+    fn sections(&self, columns: usize) -> Vec<Vec<std::ops::Range<usize>>> {
+        let mut sections = Vec::new();
+        let mut start = 0;
+        while start < self.items.len() {
+            let day = day_of(&self.items[start]);
+            let end = self.items[start..]
+                .iter()
+                .position(|i| day_of(i) != day)
+                .map_or(self.items.len(), |n| start + n);
+            sections.push(
+                (start..end)
+                    .step_by(columns)
+                    .map(|row| row..(row + columns).min(end))
+                    .collect(),
+            );
+            start = end;
+        }
+        sections
+    }
+
+    /// Moves the cursor with an arrow key, row by row within each day's rows, and scrolls it
+    /// into view. With ⇧ the selection runs from the anchor to it.
+    fn move_cursor(&mut self, key: &str, extend: bool, cx: &mut Context<Self>) {
+        if self.items.is_empty() {
+            return;
+        }
+        let last = self.items.len() - 1;
+        // The scroll view's children are each day's label followed by its rows. Each row here
+        // keeps the child to scroll into view when it's reached.
+        let mut rows = Vec::new();
+        let mut child = 0;
+        for section in self.sections(self.columns) {
+            let label = child;
+            child += 1;
+            for (n, row) in section.into_iter().enumerate() {
+                // Going up to a day's first row brings its label into view too.
+                let reveal = if n == 0 && key == "up" { label } else { child };
+                rows.push((reveal, row));
+                child += 1;
+            }
+        }
+        let current = self
+            .cursor
+            .as_ref()
+            .and_then(|c| self.items.iter().position(|i| &i.entry.path == c));
+        let next = match current {
+            None => 0,
+            Some(i) => {
+                let r = rows
+                    .iter()
+                    .position(|(_, row)| row.contains(&i))
+                    .unwrap_or(0);
+                let column = i - rows[r].1.start;
+                let target = match key {
+                    "up" => r.checked_sub(1),
+                    "down" => Some(r + 1).filter(|&t| t < rows.len()),
+                    _ => None,
+                };
+                match key {
+                    "left" => i.saturating_sub(1),
+                    "right" => (i + 1).min(last),
+                    _ => target.map_or(i, |t| (rows[t].1.start + column).min(rows[t].1.end - 1)),
+                }
+            }
+        };
+        self.select(next, if extend { Select::Range } else { Select::Only }, cx);
+        if let Some((child, _)) = rows.iter().find(|(_, row)| row.contains(&next)) {
+            self.grid_scroll.scroll_to_item(*child);
+        }
+    }
+
+    /// Moves the selected recordings to the Trash and selects the one after them.
+    fn trash_selection(&mut self, cx: &mut Context<Self>) {
+        let paths = self.selected_paths();
+        if paths.is_empty() {
+            return;
+        }
+        let first = self
+            .items
+            .iter()
+            .position(|i| paths.contains(&i.entry.path))
+            .unwrap_or(0);
+        let next = self.items[first..]
+            .iter()
+            .chain(self.items[..first].iter().rev())
+            .map(|i| i.entry.path.clone())
+            .find(|p| !paths.contains(p));
+        self.error = None;
+        self.trash(paths, cx);
+        // Anything that couldn't be trashed stays selected.
+        self.selection.retain(|p| p.exists());
+        if self.selection.is_empty()
+            && let Some(next) = next
+        {
+            self.selection = vec![next.clone()];
+            self.anchor = Some(next.clone());
+            self.cursor = Some(next);
+        }
+        cx.notify();
     }
 
     /// Shows Settings in place of the recordings, on `page` if given.
@@ -303,8 +665,15 @@ impl LibraryView {
         }
     }
 
-    /// Opens `path` at `at` seconds, playing when it's a search match.
-    fn open_detail(&mut self, path: PathBuf, at: f64, window: &mut Window, cx: &mut Context<Self>) {
+    /// Opens `path` at `at` seconds, playing if `play`.
+    fn open_detail(
+        &mut self,
+        path: PathBuf,
+        at: f64,
+        play: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(mtm) = MainThreadMarker::new() else {
             return;
         };
@@ -313,9 +682,13 @@ impl LibraryView {
         window.focus(&self.focus);
         self.state.update(cx, |s, cx| s.load_transcript(&path, cx));
         let player = Player::new(&path, mtm);
+        let playback = PLAYBACK.get();
+        player.set_speed(playback.speed);
+        player.set_volume(playback.volume);
+        player.set_muted(playback.muted);
         // Show the first frame right away.
         player.seek(at, true);
-        if at > 0. {
+        if play {
             player.play();
         }
         self.detail = Some(Detail {
@@ -324,6 +697,9 @@ impl LibraryView {
             playhead: at,
             bar: Rc::new(Cell::new(None)),
             scrubbing: false,
+            volume_bar: Rc::new(Cell::new(None)),
+            adjusting_volume: false,
+            stepped: false,
             transcript_scroll: ScrollHandle::new(),
             followed_paragraph: None,
             error: None,
@@ -348,6 +724,7 @@ impl LibraryView {
             let query = field.stringValue().to_string();
             if query != self.query {
                 self.query = query;
+                self.expanded.clear();
                 cx.notify();
             }
         }
@@ -355,7 +732,7 @@ impl LibraryView {
             return;
         };
         let mut changed = detail.player.poll();
-        if detail.player.is_playing() && !detail.scrubbing {
+        if (detail.player.is_playing() || detail.stepped) && !detail.scrubbing {
             let t = detail.player.time();
             if (t - detail.playhead).abs() > 1e-3 {
                 detail.playhead = t;
@@ -397,6 +774,7 @@ impl LibraryView {
     fn seek(&mut self, t: f64, exact: bool) {
         let duration = self.detail_duration().unwrap_or(f64::MAX);
         if let Some(detail) = &mut self.detail {
+            detail.stepped = false;
             detail.playhead = t.clamp(0., duration);
             detail.player.seek(detail.playhead, exact);
         }
@@ -407,6 +785,99 @@ impl LibraryView {
             self.seek(t, true);
             cx.notify();
         }
+    }
+
+    fn step(&mut self, frames: isize, cx: &mut Context<Self>) {
+        if let Some(detail) = &mut self.detail {
+            detail.player.step(frames);
+            detail.stepped = true;
+            cx.notify();
+        }
+    }
+
+    /// L: plays, or plays faster each time while already playing forward.
+    fn play_forwards(&mut self, cx: &mut Context<Self>) {
+        let Some(detail) = &self.detail else {
+            return;
+        };
+        let rate = detail.player.rate();
+        if rate > 0. {
+            if let Some(&faster) = SPEEDS.iter().find(|&&s| s > rate) {
+                detail.player.play_at(faster);
+            }
+            cx.notify();
+        } else {
+            if rate < 0. {
+                detail.player.pause();
+            }
+            self.toggle_play(cx);
+        }
+    }
+
+    /// J: plays backwards, faster each time; where the file can't, skips back instead.
+    fn play_backwards(&mut self, cx: &mut Context<Self>) {
+        let Some(detail) = &self.detail else {
+            return;
+        };
+        if !detail.player.can_play_backwards() {
+            self.skip(-5., cx);
+            return;
+        }
+        let rate = detail.player.rate();
+        let backwards = if rate < 0. {
+            SPEEDS
+                .iter()
+                .find(|&&s| s > -rate)
+                .copied()
+                .unwrap_or(-rate)
+        } else {
+            1.
+        };
+        detail.player.play_at(-backwards);
+        cx.notify();
+    }
+
+    /// Steps to the next playback speed, which then holds for the session.
+    fn cycle_speed(&mut self, cx: &mut Context<Self>) {
+        let mut playback = PLAYBACK.get();
+        let next = SPEEDS
+            .iter()
+            .position(|&s| s == playback.speed)
+            .map_or(0, |i| (i + 1) % SPEEDS.len());
+        playback.speed = SPEEDS[next];
+        PLAYBACK.set(playback);
+        if let Some(detail) = &self.detail {
+            detail.player.set_speed(playback.speed);
+        }
+        cx.notify();
+    }
+
+    fn toggle_mute(&mut self, cx: &mut Context<Self>) {
+        let mut playback = PLAYBACK.get();
+        playback.muted = !playback.muted;
+        PLAYBACK.set(playback);
+        if let Some(detail) = &self.detail {
+            detail.player.set_muted(playback.muted);
+        }
+        cx.notify();
+    }
+
+    /// Sets the volume from a point on its slider; turning it up unmutes.
+    fn set_volume_at(&mut self, x: Pixels, cx: &mut Context<Self>) {
+        let Some(detail) = &self.detail else {
+            return;
+        };
+        let Some(bounds) = detail.volume_bar.get() else {
+            return;
+        };
+        let volume = (f32::from(x - bounds.origin.x) / f32::from(bounds.size.width)).clamp(0., 1.);
+        let mut playback = PLAYBACK.get();
+        playback.volume = volume;
+        playback.muted = volume == 0.;
+        PLAYBACK.set(playback);
+        detail.player.set_volume(volume);
+        detail.player.set_muted(playback.muted);
+        cx.notify();
     }
 
     fn time_at(&self, x: Pixels) -> Option<f64> {
@@ -426,6 +897,14 @@ impl LibraryView {
     }
 
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.detail.as_ref().is_some_and(|d| d.adjusting_volume) {
+            if event.pressed_button == Some(MouseButton::Left) {
+                self.set_volume_at(event.position.x, cx);
+            } else if let Some(detail) = &mut self.detail {
+                detail.adjusting_volume = false;
+            }
+            return;
+        }
         if !self.detail.as_ref().is_some_and(|d| d.scrubbing) {
             return;
         }
@@ -443,6 +922,7 @@ impl LibraryView {
         let Some(detail) = &mut self.detail else {
             return;
         };
+        detail.adjusting_volume = false;
         if detail.scrubbing {
             detail.scrubbing = false;
             detail.player.seek(detail.playhead, true);
@@ -450,11 +930,7 @@ impl LibraryView {
         }
     }
 
-    fn rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(detail) = &self.detail else {
-            return;
-        };
-        let path = detail.path.clone();
+    fn rename(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         let current = path
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
@@ -468,14 +944,15 @@ impl LibraryView {
                 let result = this
                     .state
                     .update(cx, |s, cx| s.rename_recording(&path, &name, cx));
-                if let Some(detail) = this.detail.as_mut().filter(|d| d.path == path) {
-                    match result {
-                        Ok(to) => {
+                match result {
+                    Ok(to) => {
+                        this.error = None;
+                        if let Some(detail) = this.detail.as_mut().filter(|d| d.path == path) {
                             detail.path = to;
                             detail.error = None;
                         }
-                        Err(err) => detail.error = Some(err),
                     }
+                    Err(err) => this.report(err),
                 }
                 cx.notify();
             });
@@ -483,28 +960,182 @@ impl LibraryView {
         .detach();
     }
 
-    fn trash(&mut self, cx: &mut Context<Self>) {
-        let Some(path) = self.detail.as_ref().map(|d| d.path.clone()) else {
+    fn trash(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        let mut trashed = Vec::new();
+        for path in &paths {
+            let entry = self
+                .items
+                .iter()
+                .find(|i| &i.entry.path == path)
+                .map(|i| i.entry.clone());
+            match self.state.update(cx, |s, cx| s.trash_recording(path, cx)) {
+                Ok(to) => {
+                    if self.detail.as_ref().is_some_and(|d| &d.path == path) {
+                        self.close_detail(cx);
+                    }
+                    trashed.extend(entry.map(|e| (e, to)));
+                }
+                Err(err) => self.report(err),
+            }
+        }
+        if !trashed.is_empty() {
+            self.offer_undo(trashed, cx);
+        }
+        cx.notify();
+    }
+
+    /// Shows the Undo bar for a few seconds. Trashing more while it's up adds to it, so Undo
+    /// brings back everything that went.
+    fn offer_undo(&mut self, trashed: Vec<(Entry, PathBuf)>, cx: &mut Context<Self>) {
+        let shown = Instant::now();
+        let mut all = self.undo.take().map(|u| u.trashed).unwrap_or_default();
+        all.extend(trashed);
+        self.undo = Some(Undo {
+            trashed: all,
+            shown,
+        });
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(UNDO_FOR).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.undo.as_ref().is_some_and(|u| u.shown == shown) {
+                    this.undo = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Puts the recordings in the Undo bar back, and selects them.
+    fn undo_trash(&mut self, cx: &mut Context<Self>) {
+        let Some(undo) = self.undo.take() else {
             return;
         };
-        match self.state.update(cx, |s, cx| s.trash_recording(&path, cx)) {
-            Ok(()) => self.close_detail(cx),
-            Err(err) => {
-                if let Some(detail) = &mut self.detail {
-                    detail.error = Some(err);
-                }
-                cx.notify();
+        self.error = None;
+        let mut restored = Vec::new();
+        for (entry, from) in undo.trashed {
+            let path = entry.path.clone();
+            match self
+                .state
+                .update(cx, |s, cx| s.restore_recording(entry, &from, cx))
+            {
+                Ok(()) => restored.push(path),
+                Err(err) => self.report(err),
             }
+        }
+        if let Some(first) = restored.first() {
+            self.anchor = Some(first.clone());
+            self.cursor = Some(first.clone());
+            self.selection = restored;
+        }
+        cx.notify();
+    }
+
+    /// Shows why an action didn't happen: in the detail header if a recording is open, else
+    /// in the grid's.
+    fn report(&mut self, err: SharedString) {
+        match &mut self.detail {
+            Some(detail) => detail.error = Some(err),
+            None => self.error = Some(err),
         }
     }
 
-    fn edit(&mut self, cx: &mut Context<Self>) {
-        let Some(detail) = &self.detail else {
+    fn edit(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        if let Some(detail) = &self.detail {
+            detail.player.pause();
+        }
+        self.state.update(cx, |s, cx| s.open_editor(path, cx));
+    }
+
+    /// Whether `path` has a transcript with words in it, cached or made this session.
+    fn has_transcript(&self, path: &Path, cx: &App) -> bool {
+        self.items
+            .iter()
+            .find(|i| i.entry.path == path)
+            .and_then(|i| i.transcript.as_ref())
+            .is_some_and(|t| !t.is_empty())
+            || matches!(
+                self.state.read(cx).transcripts.get(path),
+                Some(TranscriptState::Ready(t)) if !t.is_empty()
+            )
+    }
+
+    /// Everything a card can do, the same as the detail view can.
+    fn card_actions(&self, path: &Path, cx: &App) -> Vec<Option<Action>> {
+        let transcript = self.has_transcript(path, cx);
+        let state = self.state.read(cx);
+        let mut actions = vec![Some(Action::Open), Some(Action::Edit), None];
+        actions.push(Some(Action::CopyFile));
+        if transcript {
+            actions.push(Some(Action::CopyTranscript));
+        }
+        let working = matches!(state.transcripts.get(path), Some(TranscriptState::Working));
+        if state.manual_model().is_some() && !working {
+            actions.push(Some(if transcript {
+                Action::TranscribeAgain
+            } else {
+                Action::Transcribe
+            }));
+        }
+        actions.extend([
+            None,
+            Some(Action::Reveal),
+            Some(Action::Rename),
+            None,
+            Some(Action::Trash),
+        ]);
+        actions
+    }
+
+    /// The menu for the card at `index`: for the whole selection when the card is part of it,
+    /// else for that card alone, which becomes the selection, as in Finder.
+    fn open_card_menu(&mut self, index: usize, at: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(path) = self.items.get(index).map(|i| i.entry.path.clone()) else {
             return;
         };
-        detail.player.pause();
-        let path = detail.path.clone();
-        self.state.update(cx, |s, cx| s.open_editor(path, cx));
+        if !self.selection.contains(&path) {
+            self.select(index, Select::Only, cx);
+        }
+        let paths = self.selected_paths();
+        let actions = match paths.as_slice() {
+            [one] => self.card_actions(one, cx),
+            _ => vec![Some(Action::Reveal), None, Some(Action::Trash)],
+        };
+        self.menu = Some(Menu { paths, at, actions });
+        cx.notify();
+    }
+
+    fn close_menu(&mut self, cx: &mut Context<Self>) {
+        if self.menu.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    fn perform(&mut self, action: Action, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(menu) = self.menu.take() else {
+            return;
+        };
+        self.error = None;
+        let Some(path) = menu.paths.first().cloned() else {
+            return;
+        };
+        match action {
+            Action::Open => self.open_detail(path, 0., false, window, cx),
+            Action::Edit => self.edit(path, cx),
+            Action::CopyFile => native::copy_file_to_pasteboard(&path),
+            Action::CopyTranscript => self.copy_transcript(&path, cx),
+            Action::Transcribe => self.state.update(cx, |s, cx| s.transcribe_now(path, cx)),
+            // Forget the transcript first, or transcribing keeps the one it has.
+            Action::TranscribeAgain => self.state.update(cx, |s, cx| {
+                s.transcripts.remove(&path);
+                s.transcribe_now(path, cx);
+            }),
+            Action::Reveal => native::reveal_all_in_finder(&menu.paths),
+            Action::Rename => self.rename(path, window, cx),
+            Action::Trash if self.detail.is_none() => self.trash_selection(cx),
+            Action::Trash => self.trash(menu.paths, cx),
+        }
+        cx.notify();
     }
 
     fn copy_transcript(&mut self, path: &Path, cx: &mut Context<Self>) {
@@ -545,12 +1176,9 @@ impl LibraryView {
             Some(name) => (name, Some(time)),
             None => (time, None),
         };
-        let transcript = item.transcript.as_ref().is_some_and(|t| !t.is_empty())
-            || matches!(
-                self.state.read(cx).transcripts.get(&path),
-                Some(TranscriptState::Ready(t)) if !t.is_empty()
-            );
+        let transcript = self.has_transcript(&path, cx);
         let copied = self.copied.as_ref() == Some(&path);
+        let selected = self.selection.contains(&path);
         // Mac screens are close to 16:10.
         let height = width * 10. / 16.;
         let group = SharedString::from(format!("card-{index}"));
@@ -581,7 +1209,8 @@ impl LibraryView {
                     .inset_0()
                     .rounded(px(10.))
                     .border_1()
-                    .border_color(theme.hairline),
+                    .border_color(theme.hairline)
+                    .when(selected, |d| d.border_2().border_color(theme.accent)),
             )
             .when_some(item.duration, |d, duration| {
                 d.child(
@@ -632,7 +1261,15 @@ impl LibraryView {
                                 cx.stop_propagation();
                                 native::reveal_in_finder(&path);
                             })
-                    }),
+                    })
+                    .child(
+                        more_button(("more", index), theme)
+                            .tooltip(tip("More"))
+                            .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                                cx.stop_propagation();
+                                this.open_card_menu(index, event.position(), cx);
+                            })),
+                    ),
             );
 
         div()
@@ -643,8 +1280,14 @@ impl LibraryView {
             .flex_col()
             .gap(px(8.))
             .cursor_pointer()
-            .on_click(cx.listener(move |this, _, window, cx| {
-                this.open_detail(path.clone(), 0., window, cx)
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    this.open_card_menu(index, event.position, cx)
+                }),
+            )
+            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                this.on_card_click(index, event, window, cx)
             }))
             .child(thumbnail)
             .child(
@@ -745,21 +1388,27 @@ impl LibraryView {
                     .flex()
                     .flex_none()
                     .gap(px(6.))
-                    .child(
-                        header_button("edit", "Edit")
-                            .on_click(cx.listener(|this, _, _, cx| this.edit(cx))),
-                    )
-                    .child(header_button("reveal", "Show in Finder").on_click({
+                    .child(header_button("edit", "Edit").on_click(cx.listener({
                         let path = path.clone();
-                        move |_, _, _| native::reveal_in_finder(&path)
-                    }))
+                        move |this, _, _, cx| this.edit(path.clone(), cx)
+                    })))
+                    // The rest wait in a menu, so the header fits narrow windows.
                     .child(
-                        header_button("rename", "Rename…")
-                            .on_click(cx.listener(|this, _, window, cx| this.rename(window, cx))),
-                    )
-                    .child(
-                        header_button("trash", "Move to Trash")
-                            .on_click(cx.listener(|this, _, _, cx| this.trash(cx))),
+                        header_button("more", "⋯")
+                            .tooltip(tip("More"))
+                            .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                                this.menu = Some(Menu {
+                                    paths: vec![path.clone()],
+                                    at: event.position(),
+                                    actions: vec![
+                                        Some(Action::Reveal),
+                                        Some(Action::Rename),
+                                        None,
+                                        Some(Action::Trash),
+                                    ],
+                                });
+                                cx.notify();
+                            })),
                     ),
             )
             .into_any_element()
@@ -774,6 +1423,9 @@ impl LibraryView {
         let playhead = detail.playhead;
         let fraction = duration.map_or(0., |d| (playhead / d).clamp(0., 1.)) as f32;
         let bar = detail.bar.clone();
+        let volume_bar = detail.volume_bar.clone();
+        let playback = PLAYBACK.get();
+        let volume = if playback.muted { 0. } else { playback.volume };
 
         // A hairline edge keeps the black video frame from melting into the black window.
         let video = div()
@@ -875,6 +1527,102 @@ impl LibraryView {
                         canvas(move |b, _, _| bar.set(Some(b)), |_, _, _, _| {})
                             .absolute()
                             .inset_0(),
+                    ),
+            )
+            .child(
+                div()
+                    .id("speed")
+                    .h(px(24.))
+                    .min_w(px(44.))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .px(px(6.))
+                    .rounded(px(6.))
+                    .cursor_pointer()
+                    .text_size(px(12.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(if playback.speed == 1. {
+                        theme.text_muted
+                    } else {
+                        theme.text
+                    })
+                    .hover(|s| s.bg(theme.control_hover))
+                    .tooltip(tip("Playback speed"))
+                    .on_click(cx.listener(|this, _, _, cx| this.cycle_speed(cx)))
+                    .child(format!("{}x", playback.speed)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap(px(6.))
+                    .child(
+                        div()
+                            .id("mute")
+                            .size(px(24.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(6.))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme.control_hover))
+                            .tooltip(tip(if playback.muted { "Unmute" } else { "Mute" }))
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_mute(cx)))
+                            .child(icon(
+                                "speaker",
+                                14.,
+                                if volume == 0. {
+                                    theme.text_muted.opacity(0.5)
+                                } else {
+                                    theme.text
+                                },
+                            )),
+                    )
+                    .child(
+                        div()
+                            .id("volume")
+                            .tooltip(tip("Volume"))
+                            .w(px(VOLUME_WIDTH))
+                            .h(px(20.))
+                            .relative()
+                            .flex()
+                            .items_center()
+                            .cursor_pointer()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                                    if let Some(detail) = &mut this.detail {
+                                        detail.adjusting_volume = true;
+                                    }
+                                    this.set_volume_at(event.position.x, cx);
+                                }),
+                            )
+                            .child(
+                                div()
+                                    .relative()
+                                    .w_full()
+                                    .h(px(4.))
+                                    .rounded(px(2.))
+                                    .bg(theme.control_active)
+                                    .child(
+                                        div()
+                                            .absolute()
+                                            .top_0()
+                                            .left_0()
+                                            .h_full()
+                                            .w(relative(volume))
+                                            .rounded(px(2.))
+                                            .bg(theme.text_muted),
+                                    ),
+                            )
+                            .child(
+                                canvas(move |b, _, _| volume_bar.set(Some(b)), |_, _, _, _| {})
+                                    .absolute()
+                                    .inset_0(),
+                            ),
                     ),
             );
 
@@ -1021,6 +1769,162 @@ impl LibraryView {
 }
 
 impl LibraryView {
+    /// No recordings yet: how to make one, with the actual shortcut, and a button that does.
+    fn empty_state(&self, theme: Theme, cx: &mut Context<Self>) -> AnyElement {
+        let binding = &self.state.read(cx).settings.hotkeys.toggle_recording;
+        let how = if binding.is_empty() {
+            "Start one from the Annuncia icon in the menu bar.".to_string()
+        } else {
+            format!(
+                "Press {} to start and stop a recording, from any app.",
+                hotkeys::display_binding(binding)
+            )
+        };
+        div()
+            .flex_1()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(12.))
+            .px(px(20.))
+            .child(img("images/icon.png").size(px(64.)).opacity(0.55))
+            .child(
+                div()
+                    .text_size(px(15.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme.text)
+                    .child("No recordings yet"),
+            )
+            .child(
+                div()
+                    .max_w(px(320.))
+                    .text_size(px(12.5))
+                    .text_color(theme.text_muted)
+                    .text_center()
+                    .child(how),
+            )
+            .child(div().pt(px(4.)).child(
+                button("new-recording", "New recording", true, theme).on_click(cx.listener(
+                    |this, _, _, cx| this.state.update(cx, |s, cx| s.toggle_launcher(cx)),
+                )),
+            ))
+            .into_any_element()
+    }
+
+    /// "Moved … to the Trash" [Undo], floating at the bottom of the window.
+    fn undo_bar(&self, theme: Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let undo = self.undo.as_ref()?;
+        let message = match undo.trashed.as_slice() {
+            [(entry, _)] => format!(
+                "Moved “{}” to the Trash",
+                full_title(&entry.path, entry.created)
+            ),
+            all => format!("Moved {} recordings to the Trash", all.len()),
+        };
+        Some(
+            div()
+                .absolute()
+                .left_0()
+                .right_0()
+                .bottom(px(20.))
+                .flex()
+                .justify_center()
+                .child(
+                    div()
+                        .id("undo-bar")
+                        .occlude()
+                        .max_w(px(520.))
+                        .flex()
+                        .items_center()
+                        .gap(px(14.))
+                        .pl(px(16.))
+                        .pr(px(6.))
+                        .py(px(6.))
+                        .rounded(px(10.))
+                        .bg(theme.surface)
+                        .border_1()
+                        .border_color(theme.hairline)
+                        .shadow_lg()
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(px(13.))
+                                .text_color(theme.text)
+                                .child(message),
+                        )
+                        .child(
+                            button("undo", "Undo", false, theme)
+                                .on_click(cx.listener(|this, _, _, cx| this.undo_trash(cx))),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// The open menu, drawn over everything at the point it was opened from.
+    fn menu_popover(&self, theme: Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let menu = self.menu.as_ref()?;
+        let rows = menu
+            .actions
+            .iter()
+            .enumerate()
+            .map(|(i, action)| match *action {
+                None => div()
+                    .h(px(1.))
+                    .mx(px(8.))
+                    .my(px(4.))
+                    .bg(theme.hairline)
+                    .into_any_element(),
+                Some(action) => div()
+                    .id(("menu-item", i))
+                    .px(px(10.))
+                    .py(px(4.))
+                    .rounded(px(6.))
+                    .cursor_pointer()
+                    .whitespace_nowrap()
+                    .text_size(px(13.))
+                    .text_color(theme.text)
+                    .hover(|s| s.bg(theme.control_hover))
+                    .on_click(
+                        cx.listener(move |this, _, window, cx| this.perform(action, window, cx)),
+                    )
+                    .child(action.label())
+                    .into_any_element(),
+            })
+            .collect::<Vec<_>>();
+        Some(
+            deferred(
+                anchored()
+                    .position(menu.at)
+                    .snap_to_window_with_margin(px(8.))
+                    .child(
+                        div()
+                            .id("menu")
+                            .occlude()
+                            .min_w(px(180.))
+                            .p(px(5.))
+                            .flex()
+                            .flex_col()
+                            .rounded(px(10.))
+                            .bg(theme.surface)
+                            .border_1()
+                            .border_color(theme.hairline)
+                            .shadow_lg()
+                            // Its own mouse downs mustn't start a window drag under it.
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_menu(cx)))
+                            .children(rows),
+                    ),
+            )
+            .with_priority(1)
+            .into_any_element(),
+        )
+    }
+}
+
+impl LibraryView {
     /// Recordings whose transcript or name matches the query, each with its matches; clicking
     /// one plays the recording from there.
     fn results(&self, theme: Theme, cx: &mut Context<Self>) -> AnyElement {
@@ -1065,7 +1969,7 @@ impl LibraryView {
                 .on_click({
                     let path = path.clone();
                     cx.listener(move |this, _, window, cx| {
-                        this.open_detail(path.clone(), 0., window, cx)
+                        this.open_detail(path.clone(), 0., false, window, cx)
                     })
                 })
                 .when_some(item.thumbnail.clone(), |d, thumb| {
@@ -1093,16 +1997,18 @@ impl LibraryView {
                 1 => "1 match".to_string(),
                 n => format!("{n} matches"),
             };
+            let expanded = self.expanded.contains(&path);
+            let shown = if expanded { hits.len() } else { SHOWN_MATCHES };
             let lines = transcript.map(|t| {
                 hits.iter()
-                    .take(SHOWN_MATCHES)
+                    .take(shown)
                     .enumerate()
                     .map(|(k, hit)| {
                         let at = t.pieces[hit.start].start;
                         let (text, matched) = snippet(&t, hit);
                         let path = path.clone();
                         div()
-                            .id(("hit", i * SHOWN_MATCHES + k))
+                            .id(SharedString::from(format!("hit-{i}-{k}")))
                             .flex()
                             .items_center()
                             .gap(px(10.))
@@ -1112,7 +2018,7 @@ impl LibraryView {
                             .cursor_pointer()
                             .hover(|s| s.bg(theme.control_hover))
                             .on_click(cx.listener(move |this, _, window, cx| {
-                                this.open_detail(path.clone(), at, window, cx)
+                                this.open_detail(path.clone(), at, true, window, cx)
                             }))
                             .child(
                                 div()
@@ -1142,7 +2048,7 @@ impl LibraryView {
                     })
                     .collect::<Vec<_>>()
             });
-            let more = hits.len().saturating_sub(SHOWN_MATCHES);
+            let more = hits.len().saturating_sub(shown);
             div().flex().gap(px(16.)).child(thumbnail).child(
                 div()
                     .flex_1()
@@ -1175,13 +2081,24 @@ impl LibraryView {
                     )
                     .children(lines.into_iter().flatten())
                     .when(more > 0, |d| {
+                        // In a row of its own, so it's only as wide as its label.
                         d.child(
-                            div()
-                                .px(px(8.))
-                                .pt(px(2.))
-                                .text_size(px(12.))
-                                .text_color(theme.text_muted)
-                                .child(format!("and {more} more")),
+                            div().flex().child(
+                                div()
+                                    .id(("more-matches", i))
+                                    .px(px(8.))
+                                    .py(px(2.))
+                                    .rounded(px(6.))
+                                    .cursor_pointer()
+                                    .text_size(px(12.))
+                                    .text_color(theme.text_muted)
+                                    .hover(|s| s.bg(theme.control_hover).text_color(theme.text))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.expanded.push(path.clone());
+                                        cx.notify();
+                                    }))
+                                    .child(format!("Show {more} more")),
+                            ),
                         )
                     }),
             )
@@ -1224,10 +2141,14 @@ impl Render for LibraryView {
         if let Some((settings, _)) = &self.settings {
             return root.child(settings.clone());
         }
+        let menu = self.menu_popover(theme, cx);
+        let undo = self.undo_bar(theme, cx);
         if self.detail.is_some() {
             return root
                 .child(self.detail_header(theme, cx))
-                .child(self.detail_body(theme, cx));
+                .child(self.detail_body(theme, cx))
+                .children(undo)
+                .children(menu);
         }
         let available = f32::from(window.viewport_size().width) - PADDING * 2.;
         let columns = ((available + GAP) / (MIN_CARD + GAP)).floor().max(1.) as usize;
@@ -1264,6 +2185,17 @@ impl Render for LibraryView {
                             1 => "1 recording".to_string(),
                             n => format!("{n} recordings"),
                         }),
+                )
+            })
+            .when_some(self.error.clone(), |d, error| {
+                d.child(
+                    div()
+                        .flex_shrink()
+                        .min_w_0()
+                        .text_size(px(12.))
+                        .text_color(theme.record)
+                        .truncate()
+                        .child(error),
                 )
             })
             // Room for the native search field, then the cog.
@@ -1315,72 +2247,48 @@ impl Render for LibraryView {
         let body = if !self.query.trim().is_empty() {
             self.results(theme, cx)
         } else if self.items.is_empty() {
-            div()
-                .flex_1()
-                .flex()
-                .flex_col()
-                .items_center()
-                .justify_center()
-                .gap(px(12.))
-                .child(img("images/icon.png").size(px(64.)).opacity(0.55))
-                .child(
-                    div()
-                        .text_size(px(12.5))
-                        .text_color(theme.text_muted)
-                        .child("Recordings you make show up here"),
-                )
-                .into_any_element()
+            self.empty_state(theme, cx)
         } else {
-            let mut sections = Vec::new();
-            let mut start = 0;
-            while start < self.items.len() {
-                let day = day_of(&self.items[start]);
-                let end = self.items[start..]
-                    .iter()
-                    .position(|i| day_of(i) != day)
-                    .map_or(self.items.len(), |n| start + n);
-                let rows = (start..end)
-                    .collect::<Vec<_>>()
-                    .chunks(columns)
-                    .map(|row| {
-                        div().flex().gap(px(GAP)).children(
-                            row.iter()
-                                .map(|&i| self.card(i, &self.items[i], width, theme, cx)),
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                sections.push(
+            self.columns = columns;
+            // Labels and rows are the scroll view's own children, so the arrow keys can scroll
+            // a row into view.
+            let mut children = Vec::new();
+            for (n, rows) in self.sections(columns).into_iter().enumerate() {
+                let day = day_of(&self.items[rows[0].start]);
+                children.push(
                     div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(GAP))
-                        .child(
-                            div()
-                                .text_size(px(13.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(theme.text)
-                                .child(day_label(day)),
-                        )
-                        .children(rows),
+                        // The gap between days, on top of the one between rows.
+                        .when(n > 0, |d| d.mt(px(28. - GAP)))
+                        .text_size(px(13.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(theme.text)
+                        .child(day_label(day))
+                        .into_any_element(),
                 );
-                start = end;
+                for row in rows {
+                    children.push(
+                        div()
+                            .flex()
+                            .gap(px(GAP))
+                            .children(row.map(|i| self.card(i, &self.items[i], width, theme, cx)))
+                            .into_any_element(),
+                    );
+                }
             }
             div()
                 .id("library-scroll")
                 .flex_1()
                 .overflow_y_scroll()
-                .child(
-                    div()
-                        .p(px(PADDING))
-                        .flex()
-                        .flex_col()
-                        .gap(px(28.))
-                        .children(sections),
-                )
+                .track_scroll(&self.grid_scroll)
+                .p(px(PADDING))
+                .flex()
+                .flex_col()
+                .gap(px(GAP))
+                .children(children)
                 .into_any_element()
         };
 
-        root.child(header).child(body)
+        root.child(header).child(body).children(undo).children(menu)
     }
 }
 
@@ -1430,6 +2338,24 @@ fn overlay_button(
         .whitespace_nowrap()
         .child(icon(icon_name, 12., theme.text))
         .child(label)
+}
+
+/// The "⋯" overlay button that opens a card's menu.
+fn more_button(id: impl Into<gpui::ElementId>, theme: Theme) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .h(px(26.))
+        .w(px(30.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(7.))
+        .bg(hsla(0., 0., 0., 0.72))
+        .hover(|s| s.bg(hsla(0., 0., 0.12, 0.9)))
+        .text_size(px(13.))
+        .font_weight(FontWeight::BOLD)
+        .text_color(theme.text)
+        .child("⋯")
 }
 
 fn local_time(created: i64) -> Option<DateTime<Local>> {

@@ -1228,22 +1228,46 @@ impl Annuncia {
         Ok(to)
     }
 
+    /// Returns where the file went in the Trash, for Undo.
     pub fn trash_recording(
         &mut self,
         path: &Path,
         cx: &mut Context<Self>,
-    ) -> Result<(), SharedString> {
+    ) -> Result<PathBuf, SharedString> {
         if self.editing.as_deref() == Some(path) {
             return Err("Close the editor before moving this recording to the Trash".into());
         }
-        if !native::trash(path) {
+        let Some(trashed) = native::trash(path) else {
             return Err("Couldn't move the recording to the Trash".into());
-        }
+        };
         self.transcripts.remove(path);
         if matches!(&self.phase, Phase::Saved { path: saved, .. } if saved == path) {
             self.dismiss_saved(cx);
         }
         self.library.remove(path);
+        self.library_revision += 1;
+        cx.notify();
+        Ok(trashed)
+    }
+
+    /// Undoes `trash_recording`: moves the file back from `trashed` and returns it to the
+    /// library with its original date. Its cached transcript and thumbnail still match it.
+    pub fn restore_recording(
+        &mut self,
+        entry: crate::library::Entry,
+        trashed: &Path,
+        cx: &mut Context<Self>,
+    ) -> Result<(), SharedString> {
+        if entry.path.exists() {
+            let name = entry
+                .path
+                .file_name()
+                .map_or("it".into(), |n| n.to_string_lossy());
+            return Err(format!("Couldn't put back “{name}”: there's a new file there").into());
+        }
+        std::fs::rename(trashed, &entry.path)
+            .map_err(|err| SharedString::from(format!("Couldn't put the recording back: {err}")))?;
+        self.library.restore(entry);
         self.library_revision += 1;
         cx.notify();
         Ok(())
