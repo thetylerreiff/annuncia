@@ -1023,7 +1023,8 @@ impl LibraryView {
                     if self.detail.as_ref().is_some_and(|d| &d.path == path) {
                         self.close_detail(cx);
                     }
-                    trashed.extend(entry.map(|e| (e, to)));
+                    // Undo can only put back what it can find in the Trash.
+                    trashed.extend(entry.zip(to));
                 }
                 Err(err) => self.report(err),
             }

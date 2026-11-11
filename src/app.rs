@@ -1092,16 +1092,16 @@ impl Annuncia {
         Ok(to)
     }
 
-    /// Returns where the file went in the Trash, for Undo.
+    /// Returns where the file went in the Trash, for Undo, if Foundation said.
     pub fn trash_recording(
         &mut self,
         path: &Path,
         cx: &mut Context<Self>,
-    ) -> Result<PathBuf, SharedString> {
+    ) -> Result<Option<PathBuf>, SharedString> {
         if self.editing.as_deref() == Some(path) {
             return Err("Close the editor before moving this recording to the Trash".into());
         }
-        let Some(trashed) = native::trash(path) else {
+        let Ok(trashed) = native::trash(path) else {
             return Err("Couldn't move the recording to the Trash".into());
         };
         self.transcripts.remove(path);
