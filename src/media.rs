@@ -68,6 +68,19 @@ pub fn duration(path: &Path) -> f64 {
     unsafe { asset(path).duration().seconds() }
 }
 
+/// Frame rate of a media file's video track, if it has one.
+#[allow(deprecated)] // Synchronous loading is fine off the main thread.
+pub fn frame_rate(path: &Path) -> Option<f64> {
+    // SAFETY: reads properties of a local asset's first video track.
+    let rate = unsafe {
+        asset(path)
+            .tracksWithMediaType(AVMediaTypeVideo?)
+            .firstObject()?
+            .nominalFrameRate()
+    };
+    (rate > 0.).then_some(f64::from(rate))
+}
+
 /// Joins the parts of a paused recording without re-encoding.
 pub fn join(parts: &[PathBuf], out: &Path) -> Result<()> {
     let sources: Vec<Source> = parts

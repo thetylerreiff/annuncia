@@ -76,6 +76,8 @@ pub struct Editor {
     player: Player,
     /// `None` until the file's length and waveform have loaded.
     edit: Option<Edit>,
+    /// The recording's own frame rate, for stepping a frame at a time.
+    frame_rate: Option<f64>,
     /// Peak loudness every 1/`PEAKS_PER_SECOND` seconds.
     waveform: Vec<f32>,
     playhead: f64,
@@ -187,6 +189,7 @@ impl Editor {
         let load = path.clone();
         let task = cx.background_spawn(async move {
             let duration = media::duration(&load);
+            let frame_rate = media::frame_rate(&load);
             // One read of the audio feeds both the waveform and the pause map.
             let pcm = media::audio(&load, speech::SAMPLE_RATE as f64).unwrap_or_default();
             let waveform: Vec<f32> = pcm
@@ -194,16 +197,17 @@ impl Editor {
                 .flat_map(|chunk| media::peaks(chunk, 1))
                 .collect();
             let silences = speech::silences(&pcm, 0.3);
-            (duration, waveform, silences)
+            (duration, frame_rate, waveform, silences)
         });
         cx.spawn(async move |this, cx| {
-            let (duration, waveform, silences) = task.await;
+            let (duration, frame_rate, waveform, silences) = task.await;
             let _ = this.update(cx, |this, cx| {
                 if duration.is_finite() && duration > 0. {
                     this.edit = Some(Edit::new(duration));
                 } else {
                     this.error = Some("Couldn't read this recording".into());
                 }
+                this.frame_rate = frame_rate;
                 this.waveform = waveform;
                 this.silences = silences;
                 this.auto_clean_up(cx);
@@ -231,6 +235,7 @@ impl Editor {
             focus,
             player,
             edit: None,
+            frame_rate: None,
             waveform: Vec::new(),
             playhead: 0.,
             selected: None,
@@ -668,12 +673,15 @@ impl Editor {
                 self.seek((self.playhead + delta).clamp(0., duration), true);
                 cx.notify();
             }
-            // A frame back or forward, at the frame rate recordings are made at.
+            // A frame back or forward, on the recording's frame grid (the frame rate in Settings
+            // until it's read).
             "," | "." => {
                 let Some(duration) = self.edit.as_ref().map(|e| e.duration) else {
                     return;
                 };
-                let fps = f64::from(self.state.read(cx).settings.fps.max(1));
+                let fps = self
+                    .frame_rate
+                    .unwrap_or_else(|| f64::from(self.state.read(cx).settings.fps.max(1)));
                 let delta = if keystroke.key == "," { -1. } else { 1. };
                 let frame = (self.playhead * fps).round() + delta;
                 self.player.pause();
