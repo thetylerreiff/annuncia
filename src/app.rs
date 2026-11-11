@@ -425,6 +425,8 @@ impl Annuncia {
             Phase::Saved { until, .. } if now >= *until => {
                 self.phase = Phase::Idle;
                 self.sync_windows(cx);
+                // With a notice up the HUD stays, and must drop the saved row.
+                cx.notify();
             }
             _ => {}
         }
@@ -435,6 +437,8 @@ impl Annuncia {
         {
             self.notice = None;
             self.sync_windows(cx);
+            // Outside a recording or countdown nothing else redraws the HUD.
+            cx.notify();
         }
     }
 
