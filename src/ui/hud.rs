@@ -11,7 +11,7 @@ use gpui::{
     pulsating_between, px, rgb,
 };
 
-use crate::app::{self, Annuncia, End, Notice, Phase, Severity, TranscriptState};
+use crate::app::{self, Annuncia, End, Notice, Phase, TranscriptState};
 use crate::hotkeys::display_binding;
 use crate::models::Transcription;
 use crate::native::{self, MenuBarGeometry, OverlayLevel, TopLeftRect};
@@ -469,29 +469,19 @@ impl Hud {
                 })
                 .into_any_element(),
             ),
-            Phase::Idle => {
-                let error = state
-                    .notice
-                    .as_ref()
-                    .is_some_and(|n| n.severity == Severity::Error);
-                (
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(6.))
-                        .child(div().size(px(8.)).rounded_full().bg(if error {
-                            theme.record
-                        } else {
-                            theme.warn
-                        }))
-                        .child(label(if error { "Error" } else { "Notice" }, white(0.92)))
-                        .into_any_element(),
-                    self.icon_button("dismiss", "✕", white(0.7), cx, |s, cx| {
-                        s.dismiss_saved(cx)
-                    })
+            Phase::Idle => (
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .child(div().size(px(8.)).rounded_full().bg(theme.record))
+                    .child(label("Error", white(0.92)))
                     .into_any_element(),
-                )
-            }
+                self.icon_button("dismiss", "✕", white(0.7), cx, |s, cx| {
+                    s.dismiss_saved(cx)
+                })
+                .into_any_element(),
+            ),
         }
     }
 
@@ -500,8 +490,7 @@ impl Hud {
         let (message_lines, detail_lines) = notice_lines(&notice);
         // Idle or saved, the bar's ✕ dismisses it; otherwise that end of the bar holds the
         // recording's controls, and an error waits to be dismissed.
-        let own_dismiss = notice.severity == Severity::Error
-            && !matches!(self.state.read(cx).phase, Phase::Idle | Phase::Saved { .. });
+        let own_dismiss = !matches!(self.state.read(cx).phase, Phase::Idle | Phase::Saved { .. });
         div()
             .h(px(height as f32))
             .w_full()

@@ -102,16 +102,8 @@ pub enum End {
     Restart,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Severity {
-    Info,
-    /// Something failed: a red dot and a title, and it stays until dismissed.
-    Error,
-}
-
 #[derive(Clone)]
 pub struct Notice {
-    pub severity: Severity,
     /// A short bold line above the message, for errors ("Couldn't start recording").
     pub title: Option<SharedString>,
     /// A plain sentence: what happened and what to do.
@@ -119,25 +111,13 @@ pub struct Notice {
     /// The technical error chain, shown muted under the message so it can still be reported.
     pub detail: Option<SharedString>,
     pub action: Option<(SharedString, &'static str)>,
-    /// When an info notice goes away; errors wait to be dismissed.
+    /// When the notice goes away by itself; without it, it waits to be dismissed.
     pub until: Option<Instant>,
 }
 
 impl Notice {
-    pub fn info(message: impl Into<SharedString>) -> Self {
-        Self {
-            severity: Severity::Info,
-            title: None,
-            message: message.into(),
-            detail: None,
-            action: None,
-            until: Some(Instant::now() + Duration::from_secs(10)),
-        }
-    }
-
     pub fn error(title: &'static str, message: impl Into<SharedString>) -> Self {
         Self {
-            severity: Severity::Error,
             title: Some(title.into()),
             message: message.into(),
             detail: None,
@@ -156,7 +136,7 @@ impl Notice {
         self
     }
 
-    /// Lets an error go away like an info notice does: for problems raised just by opening the
+    /// Lets an error go away by itself after a while: for problems raised just by opening the
     /// panel, which would otherwise stay pinned on a Mac that will always have them.
     pub fn timed(mut self) -> Self {
         self.until = Some(Instant::now() + Duration::from_secs(10));
@@ -808,27 +788,6 @@ impl Annuncia {
         if let Phase::Saved { until, .. } = &mut self.phase {
             *until = (*until).max(Instant::now() + Duration::from_secs(3));
         }
-    }
-
-    /// Shows an info notice, which goes away by itself.
-    pub fn show_notice(
-        &mut self,
-        message: impl Into<SharedString>,
-        action: Option<(SharedString, &'static str)>,
-        cx: &mut Context<Self>,
-    ) {
-        self.set_notice(message, action);
-        self.sync_windows(cx);
-        cx.notify();
-    }
-
-    /// Sets an info notice without reconciling windows; for use inside `sync_windows`.
-    fn set_notice(
-        &mut self,
-        message: impl Into<SharedString>,
-        action: Option<(SharedString, &'static str)>,
-    ) {
-        self.post(Notice::info(message).action(action));
     }
 
     pub fn show(&mut self, notice: Notice, cx: &mut Context<Self>) {

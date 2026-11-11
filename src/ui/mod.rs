@@ -45,10 +45,6 @@ pub struct Theme {
     /// only about 3.3:1.
     pub accent_soft: Hsla,
     pub accent_text: Hsla,
-    /// Healthy / granted.
-    pub ok: Hsla,
-    /// Needs attention, but nothing is broken.
-    pub warn: Hsla,
     pub record: Hsla,
     /// A starfield behind Settings, the library and the panel, which marks a nightly build.
     pub stars: bool,
@@ -84,8 +80,6 @@ impl Theme {
             accent: rgb(ACCENT).into(),
             accent_soft: rgb(0x8c8cff).into(),
             accent_text: hsla(0., 0., 1., 1.),
-            ok: rgb(0x30d158).into(),
-            warn: rgb(0xffd60a).into(),
             record: rgb(0xff453a).into(),
             stars: false,
         }
@@ -271,31 +265,13 @@ pub fn tip(text: impl Into<SharedString>) -> impl Fn(&mut Window, &mut App) -> A
     let text = text.into();
     move |_, cx| {
         let text = text.clone();
-        cx.new(|_| Tip { text, key: None }).into()
-    }
-}
-
-/// Like [`tip`], with the shortcut in a keycap after the text.
-pub fn tip_with_key(
-    text: impl Into<SharedString>,
-    key: impl Into<SharedString>,
-) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
-    let text = text.into();
-    let key = key.into();
-    move |_, cx| {
-        let (text, key) = (text.clone(), key.clone());
-        cx.new(|_| Tip {
-            text,
-            key: Some(key),
-        })
-        .into()
+        cx.new(|_| Tip { text }).into()
     }
 }
 
 /// The view behind [`tip`]: a small label of black glass.
 struct Tip {
     text: SharedString,
-    key: Option<SharedString>,
 }
 
 impl Render for Tip {
@@ -314,8 +290,5 @@ impl Render for Tip {
             .text_size(px(11.5))
             .text_color(theme.text)
             .child(self.text.clone())
-            .when_some(self.key.clone(), |d, key| {
-                d.child(keycap(key, theme.text_muted))
-            })
     }
 }

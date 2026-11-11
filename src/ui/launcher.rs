@@ -286,8 +286,7 @@ impl Render for Launcher {
                 CaptureMode::Screen,
                 "display",
                 "Full screen",
-                "Main display".into(),
-                theme.text_muted,
+                ("Main display".into(), theme.text_muted),
                 mode,
                 theme,
             ))
@@ -295,8 +294,7 @@ impl Render for Launcher {
                 CaptureMode::Window,
                 "window",
                 "Window",
-                window_subtitle,
-                window_subtitle_color,
+                (window_subtitle, window_subtitle_color),
                 mode,
                 theme,
             ));
@@ -616,8 +614,7 @@ impl Launcher {
         mode: CaptureMode,
         icon_name: &'static str,
         title: &'static str,
-        subtitle: String,
-        subtitle_color: Hsla,
+        (subtitle, subtitle_color): (String, Hsla),
         current: CaptureMode,
         theme: Theme,
     ) -> impl IntoElement {
