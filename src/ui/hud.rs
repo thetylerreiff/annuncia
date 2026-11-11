@@ -29,6 +29,9 @@ const CAPSULE_HEIGHT: f64 = 30.;
 const BUTTON: f32 = 24.;
 const RECORD: u32 = 0xff453a;
 const SAVED_DRAWER: f64 = 38.;
+/// The strip under the bar that spells out an armed control ("Click again to discard"). It sits
+/// below rather than in the bar, which can't grow or change without moving the controls.
+const HINT_STRIP: f64 = 20.;
 /// Notice text sets its own line height, so the drawer can be sized before layout.
 const NOTICE_LINE: f32 = 15.;
 /// The most lines a notice gets, title and error chain included.
@@ -40,12 +43,20 @@ pub struct Hud {
     geometry: MenuBarGeometry,
     applied: Option<TopLeftRect>,
     hovered: bool,
-    /// Restart throws the recording away, so it takes a second click before this passes.
-    confirm_restart_until: Option<Instant>,
+    /// Restart and Discard throw the recording away, so each takes a second click before this
+    /// passes.
+    armed: Option<(Armed, Instant)>,
     /// When the transcript was last copied, for a moment of "Copied" feedback.
     copied_at: Option<Instant>,
     /// When the saved file was last copied, likewise.
     file_copied_at: Option<Instant>,
+}
+
+/// A control that throws the take away, waiting for its second click.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Armed {
+    Restart,
+    Discard,
 }
 
 pub fn format_elapsed(secs: u64) -> String {
@@ -73,7 +84,7 @@ pub fn open(state: Entity<Annuncia>, cx: &mut App) -> Option<WindowHandle<Hud>> 
                 geometry,
                 applied: Some(rect),
                 hovered: false,
-                confirm_restart_until: None,
+                armed: None,
                 copied_at: None,
                 file_copied_at: None,
             }
@@ -128,11 +139,18 @@ impl Render for Hud {
         let notice = state.notice.clone();
         let saved = matches!(state.phase, Phase::Saved { .. });
         let notice_height = notice.as_ref().map_or(0., notice_height);
-        let drawer_height = notice_height + if saved { SAVED_DRAWER } else { 0. };
-        let min_width = if drawer_height > 0. { DRAWER_WIDTH } else { 0. };
+        let min_width = if notice.is_some() || saved {
+            DRAWER_WIDTH
+        } else {
+            0.
+        };
         if !recording {
-            self.confirm_restart_until = None;
+            self.armed = None;
         }
+        let hint = self.bar_hint(theme);
+        let drawer_height = notice_height
+            + if saved { SAVED_DRAWER } else { 0. }
+            + if hint.is_some() { HINT_STRIP } else { 0. };
         let rect = frame_for(&self.geometry, drawer_height, min_width, expanded);
         if self.applied != Some(rect) {
             self.applied = Some(rect);
@@ -180,6 +198,17 @@ impl Render for Hud {
                 .w_full()
                 .flex()
                 .flex_col()
+                .children(hint.map(|(text, color)| {
+                    div()
+                        .h(px(HINT_STRIP as f32))
+                        .w_full()
+                        .px(px(10.))
+                        .pb(px(4.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(hint_label(text, color))
+                }))
                 .children(notice.map(|n| self.notice_drawer(n, notice_height, cx)))
                 .children(saved.then(|| self.drawer(SAVED_DRAWER, cx)))
         });
@@ -253,6 +282,21 @@ impl Hud {
         .detach();
     }
 
+    /// Words for the strip under the bar: what an armed control will do.
+    fn bar_hint(&self, theme: Theme) -> Option<(SharedString, Hsla)> {
+        let text = match self.armed()? {
+            Armed::Restart => "Click again to restart",
+            Armed::Discard => "Click again to discard",
+        };
+        Some((text.into(), theme.record))
+    }
+
+    fn armed(&self) -> Option<Armed> {
+        self.armed
+            .filter(|(_, until)| Instant::now() < *until)
+            .map(|(armed, _)| armed)
+    }
+
     fn wings(
         &self,
         expanded: bool,
@@ -316,7 +360,7 @@ impl Hud {
                         .flex()
                         .items_center()
                         .gap(px(8.))
-                        .when(expanded, |d| d.child(self.restart_button(cx)))
+                        .when(expanded, |d| d.child(self.armed_button(Armed::Restart, cx)))
                         .child(status)
                         .child(
                             div()
@@ -338,11 +382,7 @@ impl Hud {
                             |s, cx| s.toggle_pause(cx),
                         ))
                         .child(self.stop_button())
-                        .when(expanded, |d| {
-                            d.child(self.svg_button("discard", "x", white(0.5), |s, cx| {
-                                s.cancel_recording(cx)
-                            }))
-                        })
+                        .when(expanded, |d| d.child(self.armed_button(Armed::Discard, cx)))
                         .into_any_element(),
                 )
             }
@@ -611,16 +651,18 @@ impl Hud {
         .detach();
     }
 
-    /// Restart throws the take away, so the first click arms it (the button turns red) and a
-    /// second click within three seconds restarts.
-    fn restart_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let confirming = self
-            .confirm_restart_until
-            .is_some_and(|t| Instant::now() < t);
+    /// Restart and Discard throw the take away, so the first click arms one (it turns red and
+    /// the strip under the bar says so) and a second click within three seconds goes ahead.
+    fn armed_button(&self, which: Armed, cx: &mut Context<Self>) -> impl IntoElement {
+        let confirming = self.armed() == Some(which);
         let hud = cx.entity().downgrade();
         let state = self.state.clone();
+        let (id, name) = match which {
+            Armed::Restart => ("restart", "restart"),
+            Armed::Discard => ("discard", "x"),
+        };
         div()
-            .id("restart")
+            .id(id)
             .size(px(BUTTON))
             .flex_none()
             .flex()
@@ -635,13 +677,16 @@ impl Hud {
             .when(!confirming, |d| d.hover(|s| s.bg(white(0.12))))
             .on_click(move |_, _, cx| {
                 if confirming {
-                    state.update(cx, |s, cx| s.restart_recording(cx));
+                    state.update(cx, |s, cx| match which {
+                        Armed::Restart => s.restart_recording(cx),
+                        Armed::Discard => s.cancel_recording(cx),
+                    });
                     return;
                 }
                 let _ = hud.update(cx, |this, cx| {
-                    this.confirm_restart_until = Some(Instant::now() + Duration::from_secs(3));
+                    this.armed = Some((which, Instant::now() + Duration::from_secs(3)));
                     cx.notify();
-                    // Put the label back once the confirmation window has passed.
+                    // Fold the strip away once the confirmation window has passed.
                     cx.spawn(async move |this, cx| {
                         cx.background_executor()
                             .timer(Duration::from_millis(3050))
@@ -652,7 +697,7 @@ impl Hud {
                 });
             })
             .child(icon(
-                "restart",
+                name,
                 14.,
                 if confirming {
                     rgb(RECORD).into()
@@ -749,6 +794,17 @@ fn notice_height(notice: &Notice) -> f64 {
     let (message, detail) = notice_lines(notice);
     let title = usize::from(notice.title.is_some());
     (title + message + detail) as f64 * f64::from(NOTICE_LINE) + 18.
+}
+
+/// The words in the strip under the bar.
+fn hint_label(text: SharedString, color: Hsla) -> impl IntoElement {
+    div()
+        .min_w_0()
+        .truncate()
+        .text_size(px(11.5))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(color)
+        .child(text)
 }
 
 fn label(text: &'static str, color: Hsla) -> impl IntoElement {
