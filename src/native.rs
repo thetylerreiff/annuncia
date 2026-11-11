@@ -519,3 +519,13 @@ pub fn focus_search_field(window: &Window, field: Option<&NSSearchField>) {
         None => ns.makeFirstResponder(Some(&view)),
     };
 }
+
+/// Selects `paths` in one Finder window (`open -R` takes only one).
+pub fn reveal_all_in_finder(paths: &[std::path::PathBuf]) {
+    let urls: Vec<Retained<NSURL>> = paths
+        .iter()
+        .map(|p| NSURL::fileURLWithPath(&NSString::from_str(&p.to_string_lossy())))
+        .collect();
+    objc2_app_kit::NSWorkspace::sharedWorkspace()
+        .activateFileViewerSelectingURLs(&NSArray::from_retained_slice(&urls));
+}

@@ -61,6 +61,25 @@ pub struct LibraryView {
     menu: Option<Menu>,
     /// Why the last rename or Trash from the grid didn't happen.
     error: Option<SharedString>,
+    /// The selected recordings in the grid.
+    selection: Vec<PathBuf>,
+    /// Where ⇧-click and ⇧-arrow selections start from.
+    anchor: Option<PathBuf>,
+    /// The recording the arrow keys move from: the last one clicked or moved to.
+    cursor: Option<PathBuf>,
+    grid_scroll: ScrollHandle,
+    /// Cards per row at the last layout, for the up and down arrows.
+    columns: usize,
+}
+
+/// How a click or arrow key changes the selection.
+#[derive(Clone, Copy)]
+enum Select {
+    Only,
+    /// ⌘: add or remove one.
+    Toggle,
+    /// ⇧: everything from the anchor.
+    Range,
 }
 
 /// A small popover of actions on one or more recordings.
@@ -193,6 +212,11 @@ pub fn open(
                 settings: None,
                 menu: None,
                 error: None,
+                selection: Vec::new(),
+                anchor: None,
+                cursor: None,
+                grid_scroll: ScrollHandle::new(),
+                columns: 1,
             }
         })
     })
@@ -237,6 +261,15 @@ impl LibraryView {
                 }
             })
             .collect();
+        let items = &self.items;
+        let exists = |p: &PathBuf| items.iter().any(|i| &i.entry.path == p);
+        self.selection.retain(exists);
+        if !self.anchor.as_ref().is_some_and(exists) {
+            self.anchor = None;
+        }
+        if !self.cursor.as_ref().is_some_and(exists) {
+            self.cursor = None;
+        }
         let paths: Vec<PathBuf> = self.items.iter().map(|i| i.entry.path.clone()).collect();
         cx.spawn(async move |this, cx| {
             for path in paths {
@@ -298,6 +331,11 @@ impl LibraryView {
             native::focus_search_field(window, self.search.as_deref());
             return;
         }
+        // The grid's keys, while it shows (not search results).
+        if self.detail.is_none() && self.query.trim().is_empty() {
+            self.on_grid_key(event, window, cx);
+            return;
+        }
         if self.detail.is_none() || ks.modifiers.platform || ks.modifiers.control {
             return;
         }
@@ -308,6 +346,219 @@ impl LibraryView {
             "right" => self.skip(5., cx),
             _ => {}
         }
+    }
+
+    fn on_grid_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let ks = &event.keystroke;
+        if ks.modifiers.control || ks.modifiers.alt {
+            return;
+        }
+        let key = ks.key.as_str();
+        if ks.modifiers.platform {
+            match key {
+                "a" => {
+                    self.selection = self.items.iter().map(|i| i.entry.path.clone()).collect();
+                    cx.notify();
+                }
+                // Finder's ⌘⌫.
+                "backspace" => self.trash_selection(cx),
+                _ => {}
+            }
+            return;
+        }
+        match key {
+            "left" | "right" | "up" | "down" => self.move_cursor(key, ks.modifiers.shift, cx),
+            "enter" | "space" => {
+                if let Some(path) = self.cursor_or_first_selected() {
+                    self.open_detail(path, 0., key == "space", window, cx);
+                }
+            }
+            "backspace" | "delete" => self.trash_selection(cx),
+            "escape" => {
+                self.selection.clear();
+                cx.notify();
+            }
+            _ => {}
+        }
+    }
+
+    fn cursor_or_first_selected(&self) -> Option<PathBuf> {
+        self.cursor
+            .clone()
+            .filter(|c| self.selection.contains(c))
+            .or_else(|| self.selected_paths().into_iter().next())
+    }
+
+    /// The selection, in grid order.
+    fn selected_paths(&self) -> Vec<PathBuf> {
+        self.items
+            .iter()
+            .map(|i| &i.entry.path)
+            .filter(|p| self.selection.contains(p))
+            .cloned()
+            .collect()
+    }
+
+    fn select(&mut self, index: usize, how: Select, cx: &mut Context<Self>) {
+        let Some(path) = self.items.get(index).map(|i| i.entry.path.clone()) else {
+            return;
+        };
+        match how {
+            Select::Only => {
+                self.selection = vec![path.clone()];
+                self.anchor = Some(path.clone());
+            }
+            Select::Toggle => {
+                if let Some(i) = self.selection.iter().position(|p| *p == path) {
+                    self.selection.remove(i);
+                } else {
+                    self.selection.push(path.clone());
+                }
+                self.anchor = Some(path.clone());
+            }
+            Select::Range => {
+                let from = self
+                    .anchor
+                    .as_ref()
+                    .and_then(|a| self.items.iter().position(|i| &i.entry.path == a))
+                    .unwrap_or(index);
+                self.selection = self.items[from.min(index)..=from.max(index)]
+                    .iter()
+                    .map(|i| i.entry.path.clone())
+                    .collect();
+                if self.anchor.is_none() {
+                    self.anchor = Some(path.clone());
+                }
+            }
+        }
+        self.cursor = Some(path);
+        cx.notify();
+    }
+
+    fn on_card_click(
+        &mut self,
+        index: usize,
+        event: &ClickEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Keys go to the grid, not the search field.
+        native::focus_search_field(window, None);
+        window.focus(&self.focus);
+        let modifiers = event.modifiers();
+        if modifiers.platform {
+            self.select(index, Select::Toggle, cx);
+        } else if modifiers.shift {
+            self.select(index, Select::Range, cx);
+        } else if event.click_count() >= 2 {
+            if let Some(path) = self.items.get(index).map(|i| i.entry.path.clone()) {
+                self.open_detail(path, 0., false, window, cx);
+            }
+        } else {
+            self.select(index, Select::Only, cx);
+        }
+    }
+
+    /// The grid as laid out: each day's recordings (item indices), in rows of `columns`.
+    fn sections(&self, columns: usize) -> Vec<Vec<std::ops::Range<usize>>> {
+        let mut sections = Vec::new();
+        let mut start = 0;
+        while start < self.items.len() {
+            let day = day_of(&self.items[start]);
+            let end = self.items[start..]
+                .iter()
+                .position(|i| day_of(i) != day)
+                .map_or(self.items.len(), |n| start + n);
+            sections.push(
+                (start..end)
+                    .step_by(columns)
+                    .map(|row| row..(row + columns).min(end))
+                    .collect(),
+            );
+            start = end;
+        }
+        sections
+    }
+
+    /// Moves the cursor with an arrow key, row by row within each day's rows, and scrolls it
+    /// into view. With ⇧ the selection runs from the anchor to it.
+    fn move_cursor(&mut self, key: &str, extend: bool, cx: &mut Context<Self>) {
+        if self.items.is_empty() {
+            return;
+        }
+        let last = self.items.len() - 1;
+        // The scroll view's children are each day's label followed by its rows. Each row here
+        // keeps the child to scroll into view when it's reached.
+        let mut rows = Vec::new();
+        let mut child = 0;
+        for section in self.sections(self.columns) {
+            let label = child;
+            child += 1;
+            for (n, row) in section.into_iter().enumerate() {
+                // Going up to a day's first row brings its label into view too.
+                let reveal = if n == 0 && key == "up" { label } else { child };
+                rows.push((reveal, row));
+                child += 1;
+            }
+        }
+        let current = self
+            .cursor
+            .as_ref()
+            .and_then(|c| self.items.iter().position(|i| &i.entry.path == c));
+        let next = match current {
+            None => 0,
+            Some(i) => {
+                let r = rows
+                    .iter()
+                    .position(|(_, row)| row.contains(&i))
+                    .unwrap_or(0);
+                let column = i - rows[r].1.start;
+                let target = match key {
+                    "up" => r.checked_sub(1),
+                    "down" => Some(r + 1).filter(|&t| t < rows.len()),
+                    _ => None,
+                };
+                match key {
+                    "left" => i.saturating_sub(1),
+                    "right" => (i + 1).min(last),
+                    _ => target.map_or(i, |t| (rows[t].1.start + column).min(rows[t].1.end - 1)),
+                }
+            }
+        };
+        self.select(next, if extend { Select::Range } else { Select::Only }, cx);
+        if let Some((child, _)) = rows.iter().find(|(_, row)| row.contains(&next)) {
+            self.grid_scroll.scroll_to_item(*child);
+        }
+    }
+
+    /// Moves the selected recordings to the Trash and selects the one after them.
+    fn trash_selection(&mut self, cx: &mut Context<Self>) {
+        let paths = self.selected_paths();
+        if paths.is_empty() {
+            return;
+        }
+        let first = self
+            .items
+            .iter()
+            .position(|i| paths.contains(&i.entry.path))
+            .unwrap_or(0);
+        let next = self.items[first..]
+            .iter()
+            .chain(self.items[..first].iter().rev())
+            .map(|i| i.entry.path.clone())
+            .find(|p| !paths.contains(p));
+        self.error = None;
+        self.trash(paths, cx);
+        // Anything that couldn't be trashed stays selected.
+        self.selection.retain(|p| p.exists());
+        if self.selection.is_empty()
+            && let Some(next) = next
+        {
+            self.selection = vec![next.clone()];
+            self.anchor = Some(next.clone());
+            self.cursor = Some(next);
+        }
+        cx.notify();
     }
 
     /// Shows Settings in place of the recordings, on `page` if given.
@@ -351,8 +602,15 @@ impl LibraryView {
         }
     }
 
-    /// Opens `path` at `at` seconds, playing when it's a search match.
-    fn open_detail(&mut self, path: PathBuf, at: f64, window: &mut Window, cx: &mut Context<Self>) {
+    /// Opens `path` at `at` seconds, playing if `play`.
+    fn open_detail(
+        &mut self,
+        path: PathBuf,
+        at: f64,
+        play: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(mtm) = MainThreadMarker::new() else {
             return;
         };
@@ -363,7 +621,7 @@ impl LibraryView {
         let player = Player::new(&path, mtm);
         // Show the first frame right away.
         player.seek(at, true);
-        if at > 0. {
+        if play {
             player.play();
         }
         self.detail = Some(Detail {
@@ -598,13 +856,21 @@ impl LibraryView {
         actions
     }
 
-    fn open_card_menu(&mut self, path: PathBuf, at: Point<Pixels>, cx: &mut Context<Self>) {
-        let actions = self.card_actions(&path, cx);
-        self.menu = Some(Menu {
-            paths: vec![path],
-            at,
-            actions,
-        });
+    /// The menu for the card at `index`: for the whole selection when the card is part of it,
+    /// else for that card alone, which becomes the selection, as in Finder.
+    fn open_card_menu(&mut self, index: usize, at: Point<Pixels>, cx: &mut Context<Self>) {
+        let Some(path) = self.items.get(index).map(|i| i.entry.path.clone()) else {
+            return;
+        };
+        if !self.selection.contains(&path) {
+            self.select(index, Select::Only, cx);
+        }
+        let paths = self.selected_paths();
+        let actions = match paths.as_slice() {
+            [one] => self.card_actions(one, cx),
+            _ => vec![Some(Action::Reveal), None, Some(Action::Trash)],
+        };
+        self.menu = Some(Menu { paths, at, actions });
         cx.notify();
     }
 
@@ -623,7 +889,7 @@ impl LibraryView {
             return;
         };
         match action {
-            Action::Open => self.open_detail(path, 0., window, cx),
+            Action::Open => self.open_detail(path, 0., false, window, cx),
             Action::Edit => self.edit(path, cx),
             Action::CopyFile => native::copy_file_to_pasteboard(&path),
             Action::CopyTranscript => self.copy_transcript(&path, cx),
@@ -633,8 +899,9 @@ impl LibraryView {
                 s.transcripts.remove(&path);
                 s.transcribe_now(path, cx);
             }),
-            Action::Reveal => native::reveal_in_finder(&path),
+            Action::Reveal => native::reveal_all_in_finder(&menu.paths),
             Action::Rename => self.rename(path, window, cx),
+            Action::Trash if self.detail.is_none() => self.trash_selection(cx),
             Action::Trash => self.trash(menu.paths, cx),
         }
         cx.notify();
@@ -680,6 +947,7 @@ impl LibraryView {
         };
         let transcript = self.has_transcript(&path, cx);
         let copied = self.copied.as_ref() == Some(&path);
+        let selected = self.selection.contains(&path);
         // Mac screens are close to 16:10.
         let height = width * 10. / 16.;
         let group = SharedString::from(format!("card-{index}"));
@@ -710,7 +978,8 @@ impl LibraryView {
                     .inset_0()
                     .rounded(px(10.))
                     .border_1()
-                    .border_color(theme.hairline),
+                    .border_color(theme.hairline)
+                    .when(selected, |d| d.border_2().border_color(theme.accent)),
             )
             .when_some(item.duration, |d, duration| {
                 d.child(
@@ -762,15 +1031,12 @@ impl LibraryView {
                                 native::reveal_in_finder(&path);
                             })
                     })
-                    .child({
-                        let path = path.clone();
-                        more_button(("more", index), theme).on_click(cx.listener(
-                            move |this, event: &ClickEvent, _, cx| {
-                                cx.stop_propagation();
-                                this.open_card_menu(path.clone(), event.position(), cx);
-                            },
-                        ))
-                    }),
+                    .child(more_button(("more", index), theme).on_click(cx.listener(
+                        move |this, event: &ClickEvent, _, cx| {
+                            cx.stop_propagation();
+                            this.open_card_menu(index, event.position(), cx);
+                        },
+                    ))),
             );
 
         div()
@@ -783,15 +1049,12 @@ impl LibraryView {
             .cursor_pointer()
             .on_mouse_down(
                 MouseButton::Right,
-                cx.listener({
-                    let path = path.clone();
-                    move |this, event: &MouseDownEvent, _, cx| {
-                        this.open_card_menu(path.clone(), event.position, cx)
-                    }
+                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    this.open_card_menu(index, event.position, cx)
                 }),
             )
-            .on_click(cx.listener(move |this, _, window, cx| {
-                this.open_detail(path.clone(), 0., window, cx)
+            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                this.on_card_click(index, event, window, cx)
             }))
             .child(thumbnail)
             .child(
@@ -1273,7 +1536,7 @@ impl LibraryView {
                 .on_click({
                     let path = path.clone();
                     cx.listener(move |this, _, window, cx| {
-                        this.open_detail(path.clone(), 0., window, cx)
+                        this.open_detail(path.clone(), 0., false, window, cx)
                     })
                 })
                 .when_some(item.thumbnail.clone(), |d, thumb| {
@@ -1320,7 +1583,7 @@ impl LibraryView {
                             .cursor_pointer()
                             .hover(|s| s.bg(theme.control_hover))
                             .on_click(cx.listener(move |this, _, window, cx| {
-                                this.open_detail(path.clone(), at, window, cx)
+                                this.open_detail(path.clone(), at, true, window, cx)
                             }))
                             .child(
                                 div()
@@ -1552,52 +1815,42 @@ impl Render for LibraryView {
                 )
                 .into_any_element()
         } else {
-            let mut sections = Vec::new();
-            let mut start = 0;
-            while start < self.items.len() {
-                let day = day_of(&self.items[start]);
-                let end = self.items[start..]
-                    .iter()
-                    .position(|i| day_of(i) != day)
-                    .map_or(self.items.len(), |n| start + n);
-                let rows = (start..end)
-                    .collect::<Vec<_>>()
-                    .chunks(columns)
-                    .map(|row| {
-                        div().flex().gap(px(GAP)).children(
-                            row.iter()
-                                .map(|&i| self.card(i, &self.items[i], width, theme, cx)),
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                sections.push(
+            self.columns = columns;
+            // Labels and rows are the scroll view's own children, so the arrow keys can scroll
+            // a row into view.
+            let mut children = Vec::new();
+            for (n, rows) in self.sections(columns).into_iter().enumerate() {
+                let day = day_of(&self.items[rows[0].start]);
+                children.push(
                     div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(GAP))
-                        .child(
-                            div()
-                                .text_size(px(13.))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(theme.text)
-                                .child(day_label(day)),
-                        )
-                        .children(rows),
+                        // The gap between days, on top of the one between rows.
+                        .when(n > 0, |d| d.mt(px(28. - GAP)))
+                        .text_size(px(13.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(theme.text)
+                        .child(day_label(day))
+                        .into_any_element(),
                 );
-                start = end;
+                for row in rows {
+                    children.push(
+                        div()
+                            .flex()
+                            .gap(px(GAP))
+                            .children(row.map(|i| self.card(i, &self.items[i], width, theme, cx)))
+                            .into_any_element(),
+                    );
+                }
             }
             div()
                 .id("library-scroll")
                 .flex_1()
                 .overflow_y_scroll()
-                .child(
-                    div()
-                        .p(px(PADDING))
-                        .flex()
-                        .flex_col()
-                        .gap(px(28.))
-                        .children(sections),
-                )
+                .track_scroll(&self.grid_scroll)
+                .p(px(PADDING))
+                .flex()
+                .flex_col()
+                .gap(px(GAP))
+                .children(children)
                 .into_any_element()
         };
 
