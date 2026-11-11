@@ -1,3 +1,10 @@
+/* Body face: Schibsted Grotesk (OFL, Latin subset of the variable font, weights 400 to 700), self-hosted so no page asks a third party for it. */
+@font-face {
+  font-family: "Schibsted Grotesk";
+  src: url("/fonts/SchibstedGrotesk-Variable.woff2") format("woff2");
+  font-weight: 400 700; font-style: normal; font-display: swap;
+}
+
 /* Display face for big headings: Geist Serif (OFL, from Vercel's `geist` package). Regular weight only. */
 @font-face {
   font-family: "Geist Serif";
