@@ -376,7 +376,12 @@ impl LibraryView {
         // ⌘-keys reach us even while the search field is being edited; there they're its own
         // (⌘A, ⌘Z, ⌘⌫), not the grid's.
         let editing = self.search_editing();
-        if ks.modifiers.platform && ks.key == "z" && self.undo.is_some() && !editing {
+        if ks.modifiers.platform
+            && !ks.modifiers.shift
+            && ks.key == "z"
+            && self.undo.is_some()
+            && !editing
+        {
             self.undo_trash(cx);
             return;
         }
