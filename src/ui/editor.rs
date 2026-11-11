@@ -470,6 +470,8 @@ impl Editor {
         }
         self.undo.push(before);
         self.redo.clear();
+        // The question was about the edit as it was.
+        self.confirm_discard = false;
     }
 
     /// ⌘Z, or ⇧⌘Z when `redo`.
@@ -491,6 +493,7 @@ impl Editor {
         // Undoing automatic clean up mustn't let it run again.
         self.touched = true;
         self.cleanup_note = None;
+        self.confirm_discard = false;
         cx.notify();
     }
 
@@ -498,6 +501,11 @@ impl Editor {
     /// count: closing after only looking shouldn't ask.
     fn has_changes(&self) -> bool {
         self.touched && self.edit.as_ref().is_some_and(Edit::is_edited)
+    }
+
+    /// Whether the toolbar is asking to discard changes, which only holds while there are some.
+    fn asking(&self) -> bool {
+        self.confirm_discard && self.has_changes()
     }
 
     /// Whether closing can go ahead now. With changes to lose, it can't: the toolbar asks
@@ -669,7 +677,7 @@ impl Editor {
             }
             "l" if !self.player.is_playing() => self.toggle_play(cx),
             // A second Esc keeps editing.
-            "escape" if self.confirm_discard => {
+            "escape" if self.asking() => {
                 self.confirm_discard = false;
                 cx.notify();
             }
@@ -1198,6 +1206,7 @@ impl Editor {
             .zip(self.selected)
             .is_some_and(|(e, i)| e.is_removed(i));
         let edited = edit.is_some_and(Edit::is_edited);
+        let asking = self.asking();
 
         let icon_text =
             |id: &'static str, name: &'static str, label: &'static str, key: &'static str| {
@@ -1278,7 +1287,7 @@ impl Editor {
                     .px(px(4.))
                     .text_size(px(12.))
                     .map(|d| match (self.error.clone(), self.cleanup_note.clone()) {
-                        _ if self.confirm_discard => d.child(
+                        _ if asking => d.child(
                             div()
                                 .min_w_0()
                                 .truncate()
@@ -1303,7 +1312,7 @@ impl Editor {
                     }),
             )
             .map(|d| {
-                if self.confirm_discard {
+                if asking {
                     d.child(
                         button("keep", "Keep editing", false, theme).on_click(cx.listener(
                             |this, _, _, cx| {
