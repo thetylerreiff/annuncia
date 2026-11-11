@@ -18,6 +18,7 @@
   --gut: clamp(16px, 4vw, 48px);
   --r: 10px;
   --ease: cubic-bezier(.2, .8, .2, 1);
+  --notch-h: 34px;
   --face: url("/images/gabriel.png") 51% 30% / 330% auto no-repeat, #0d0d24;
   --font: "Schibsted Grotesk", ui-sans-serif, system-ui, -apple-system, sans-serif;
   color-scheme: dark;
@@ -91,17 +92,40 @@ body.nav-solid .nav nav { padding: 0; background: none; box-shadow: none; backdr
 .nl:hover { color: #fff; }
 .nav-dl { height: 36px; padding: 0 14px; border-radius: 8px; display: inline-flex; align-items: center; box-shadow: inset 0 0 0 1px rgba(212, 212, 242, .3); }
 .nav-dl:hover { box-shadow: inset 0 0 0 1px rgba(212, 212, 242, .7); }
+/* The compact menu: the links that don't fit, in a small sheet under the button. */
+.nav-menu { display: none; width: 40px; height: 36px; place-items: center; border-radius: 8px; box-shadow: inset 0 0 0 1px rgba(212, 212, 242, .3); }
+.nav-menu:hover { box-shadow: inset 0 0 0 1px rgba(212, 212, 242, .7); }
+.nav-menu svg { width: 18px; height: 18px; }
+.nav-menu .m-shut, .nav-menu[aria-expanded="true"] .m-open { display: none; }
+.nav-menu[aria-expanded="true"] .m-shut { display: block; }
+.nav-sheet {
+  position: absolute; top: calc(100% - 8px); right: var(--gut); width: min(260px, calc(100vw - var(--gut) * 2));
+  display: grid; gap: 2px; padding: 6px; border-radius: 14px;
+  background: rgba(10, 10, 12, .94); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 0 0 1px var(--line2), 0 30px 60px -20px rgba(0, 0, 0, .8);
+  animation: sheetIn .22s var(--ease);
+}
+.nav-sheet[hidden] { display: none; }
+.nav-sheet a { height: 46px; padding: 0 12px; border-radius: 9px; display: flex; align-items: center; font-size: 16px; font-weight: 500; }
+.nav-sheet a:hover { background: rgba(255, 255, 255, .06); }
+@keyframes sheetIn { from { opacity: 0; transform: translateY(-6px); } }
 /* While the notch is out, the middle of the top edge belongs to it. */
 @media (max-width: 1100px) {
   body.rec-on .nl { display: none; }
-  body.rec-on .nav nav { padding: 0; background: none; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
+  body.rec-on .nav nav { padding: 0; gap: 10px; background: none; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
+  body.rec-on .nav-menu { display: grid; }
 }
 @media (max-width: 760px) {
   .nl { display: none; }
-  .nav nav { padding: 0; background: none; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
+  .nav nav { padding: 0; gap: 10px; background: none; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
+  .nav-menu { display: grid; background: rgba(13, 13, 36, .55); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
   .nav-dl { background: rgba(13, 13, 36, .55); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
   .brand span { text-shadow: 0 0 12px rgba(13, 13, 36, .9); }
-  body.rec-on .nav { opacity: 0; transform: translateY(-100%); pointer-events: none; }
+  /* The notch fills the top edge here, so the nav stays out of its way: it comes back, under the
+     notch, when you scroll up (or while the menu is open). */
+  body.rec-on .nav { height: 56px; opacity: 0; transform: translateY(-100%); visibility: hidden; pointer-events: none; }
+  body.rec-on:not(.stop-on).nav-peek .nav, body.rec-on:not(.stop-on) .nav.menu-open { opacity: 1; transform: translateY(var(--notch-h)); visibility: visible; pointer-events: auto; }
+  body.rec-on:not(.stop-on).nav-peek .nav::before, body.rec-on:not(.stop-on) .nav.menu-open::before { top: calc(var(--notch-h) * -1); opacity: 1; }
 }
 
 /* ---------- The notch (fixed) ---------- */
@@ -153,6 +177,7 @@ body.nav-solid .nav nav { padding: 0; background: none; box-shadow: none; backdr
 .notch.wings-open:focus-within { --wing: 140px; }
 
 @media (max-width: 600px) {
+  :root { --notch-h: 32px; }
   .notch { --cam: 116px; --wing: 82px; --h: 32px; font-size: 12.5px; }
   .notch.wings-open:hover, .notch.wings-open:focus-within { --wing: 106px; }
   .wing { gap: 6px; }
@@ -196,7 +221,12 @@ body.nav-solid .nav nav { padding: 0; background: none; box-shadow: none; backdr
 .ov-def { font-size: 14.5px; line-height: 1.55; color: rgba(212, 212, 242, .82); max-width: 38ch; text-wrap: pretty; }
 .def-w { color: var(--silver); font-weight: 600; font-size: 15.5px; letter-spacing: -.01em; }
 .def-p { color: var(--silver); }
-.ov-cta { display: flex; gap: 10px; }
+.ov-cta { display: flex; flex-wrap: wrap; gap: 10px; }
+/* A phone can't use a disk image: offer to send the link to a Mac instead. */
+.ov-phone { display: none; flex-basis: 100%; }
+.ov-phone button { font-size: 14px; color: var(--soft); text-decoration: underline; text-decoration-color: rgba(212, 212, 242, .35); text-underline-offset: 3px; text-align: left; }
+.ov-phone button:hover { color: var(--text); text-decoration-color: var(--blue); }
+@media (max-width: 760px) and (pointer: coarse) { .ov-phone { display: block; } }
 .wordmark {
   font-family: var(--display);
   font-size: 22vw; /* refined by JS to fit the line exactly */
@@ -716,6 +746,7 @@ h3 + .body { margin-top: 12px; }
   .reveal { opacity: 1; transform: none; transition: none; }
   .notch .rdot, .an-notch .rdot { animation: none; }
   .nav, .nav::before { transition: none; }
+  .nav-sheet { animation: none; }
   .seg-el, .wing, .bubble, .dw-chart i { transition: none; }
   .chip { animation: none; }
   .kw { transition: none; }

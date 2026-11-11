@@ -1149,3 +1149,60 @@ $$('.dpa[data-say]').forEach((b) => b.addEventListener('click', () => {
     setTimeout(step, 700);
   }, { threshold: .45 }).observe($('#lib'));
 })();
+
+/* ------------------------------------------------------------------ */
+/* Nav menu, and the link for people on a phone                        */
+/* ------------------------------------------------------------------ */
+
+(() => {
+  const nav = $('#nav'), btn = $('#navMenu'), sheet = $('#navSheet');
+  const set = (open) => {
+    btn.setAttribute('aria-expanded', String(open));
+    sheet.hidden = !open;
+    nav.classList.toggle('menu-open', open);
+  };
+  const close = (refocus) => { if (sheet.hidden) return; set(false); if (refocus) btn.focus(); };
+  btn.addEventListener('click', () => set(sheet.hidden));
+  sheet.addEventListener('click', (e) => { if (e.target.closest('a')) close(false); });
+  nav.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !sheet.hidden) { e.preventDefault(); close(true); } });
+  // Tabbing out of the menu, or tapping elsewhere, closes it without stealing focus back.
+  nav.addEventListener('focusout', (e) => { if (e.relatedTarget && !nav.contains(e.relatedTarget)) close(false); });
+  document.addEventListener('pointerdown', (e) => { if (!nav.contains(e.target)) close(false); });
+
+  // The button only exists below the breakpoint (and while the notch is out); if it goes, so does the sheet.
+  const gone = () => { if (!sheet.hidden && (getComputedStyle(btn).display === 'none' || document.body.classList.contains('stop-on'))) close(false); };
+  addEventListener('resize', gone);
+
+  // On a phone the notch takes the top edge, so the nav hides while it's out and comes back under it
+  // when you scroll up.
+  let lastY = scrollY;
+  addEventListener('scroll', () => {
+    const y = scrollY, d = y - lastY;
+    if (Math.abs(d) < 6) return;
+    lastY = y;
+    document.body.classList.toggle('nav-peek', d < 0);
+    if (d > 0) close(false);
+    gone();
+  }, { passive: true });
+
+  // "On your phone?": copy the download page's address so it can be opened on a Mac.
+  const copy = $('#phoneCopy'), say = $('#phoneSay');
+  const label = copy.textContent;
+  copy.addEventListener('click', async () => {
+    const url = new URL('/download.html', location.href).href;
+    let ok = false;
+    try { await navigator.clipboard.writeText(url); ok = true; } catch {
+      // No async clipboard (an insecure origin, say): fall back to selecting and copying.
+      const t = document.createElement('textarea');
+      t.value = url; t.setAttribute('readonly', ''); t.style.cssText = 'position:fixed;top:0;opacity:0';
+      document.body.appendChild(t); t.select();
+      try { ok = document.execCommand('copy'); } catch { /* reported below */ }
+      t.remove();
+    }
+    const msg = ok ? 'Link copied. Open it on your Mac.' : `Couldn’t copy. The link is ${url}`;
+    say.textContent = msg;
+    copy.textContent = msg;
+    clearTimeout(copy._t);
+    copy._t = setTimeout(() => { copy.textContent = label; say.textContent = ''; }, 3200);
+  });
+})();
