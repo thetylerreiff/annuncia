@@ -133,7 +133,13 @@ The editor opens as soon as a recording is saved (turn that off in Settings, or 
 | <kbd>C</kbd> | Clean up: trim dead air, shorten long pauses, cut filler words |
 | <kbd>I</kbd> / <kbd>O</kbd> | Trim the start / end of the clip under the playhead |
 | <kbd>←</kbd> / <kbd>→</kbd> | Step a second (five with <kbd>⇧</kbd>) |
+| <kbd>,</kbd> / <kbd>.</kbd> | Step a frame back / forward |
+| <kbd>J</kbd> / <kbd>K</kbd> / <kbd>L</kbd> | Back a second / pause / play |
+| <kbd>⌘</kbd><kbd>Z</kbd> / <kbd>⇧</kbd><kbd>⌘</kbd><kbd>Z</kbd> | Undo / redo |
+| <kbd>⌘</kbd><kbd>=</kbd> / <kbd>⌘</kbd><kbd>-</kbd> / <kbd>⌘</kbd><kbd>0</kbd> | Zoom the timeline in / out / to fit (scroll to pan) |
+| <kbd>⇧</kbd>-click a transcript word, then <kbd>⌫</kbd> | Cut from the last word clicked to that one |
 | <kbd>⌘</kbd><kbd>S</kbd> or <kbd>Return</kbd> | Save |
+| <kbd>⇧</kbd><kbd>⌘</kbd><kbd>S</kbd> | Save as copy, leaving the original as it is |
 
 **Clean up** does the tedious part for you: it trims the silence before you start talking and after you finish, shortens any pause longer than a second to a natural beat, and, with an English transcript, cuts "um", "uh" and similar fillers. Each cut is a split with both clips trimmed back, exactly as you'd do it by hand, so dragging a handle restores any of it, and Reset undoes the lot. To have this happen whenever the editor opens, choose **Pauses** or **Pauses and filler words** under **Settings → After recording → Clean up**.
 
