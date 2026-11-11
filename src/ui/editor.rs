@@ -468,9 +468,11 @@ impl Editor {
         window.remove_window();
     }
 
-    fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Saves the edit over the recording, or with `copy` as a new recording beside it that
+    /// leaves the original as it is.
+    fn save(&mut self, copy: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(edit) = &self.edit else { return };
-        if self.saving.is_some() {
+        if self.saving.is_some() || (copy && !edit.is_edited()) {
             return;
         }
         if !edit.is_edited() {
@@ -507,16 +509,34 @@ impl Editor {
             .inspect_err(|_| {
                 let _ = std::fs::remove_file(&temp);
             })?;
-            // Nothing is deleted outright: the unedited recording goes to the Trash.
-            let _ = crate::native::trash(&path);
-            std::fs::rename(&temp, &path)?;
-            anyhow::Ok(path)
+            let out = if copy {
+                // Beside the original, numbered when the name is taken.
+                let mut out = path.with_file_name(format!("{stem} (edited).mp4"));
+                let mut n = 1;
+                while out.exists() {
+                    n += 1;
+                    out = path.with_file_name(format!("{stem} (edited {n}).mp4"));
+                }
+                out
+            } else {
+                // Nothing is deleted outright: the unedited recording goes to the Trash.
+                let _ = crate::native::trash(&path);
+                path
+            };
+            std::fs::rename(&temp, &out)?;
+            anyhow::Ok(out)
         });
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;
             let _ = this.update_in(cx, |this, window, cx| match result {
                 Ok(path) => {
-                    this.state.update(cx, |s, cx| s.edit_saved(path, cx));
+                    this.state.update(cx, |s, cx| {
+                        if copy {
+                            s.edit_copied(path, cx);
+                        } else {
+                            s.edit_saved(path, cx);
+                        }
+                    });
                     window.remove_window();
                 }
                 Err(err) => {
@@ -535,7 +555,8 @@ impl Editor {
         // ⌘ chords never fall through to the single-letter tools below (⌘C isn't Clean up).
         if keystroke.modifiers.platform {
             match keystroke.key.as_str() {
-                "s" => self.save(window, cx),
+                // ⇧⌘S saves as a copy.
+                "s" => self.save(keystroke.modifiers.shift, window, cx),
                 "z" => self.undo(keystroke.modifiers.shift, cx),
                 "=" | "+" => self.zoom_to(self.zoom * 2., self.playhead, cx),
                 "-" => self.zoom_to(self.zoom / 2., self.playhead, cx),
@@ -607,7 +628,7 @@ impl Editor {
                     self.close(window, cx);
                 }
             }
-            "enter" => self.save(window, cx),
+            "enter" => self.save(false, window, cx),
             _ => {}
         }
     }
@@ -1250,10 +1271,17 @@ impl Editor {
                             },
                         )),
                     )
+                    .when(edited && self.saving.is_none(), |d| {
+                        d.child(button("save-copy", "Save as copy", false, theme).on_click(
+                            cx.listener(|this, _, window, cx| this.save(true, window, cx)),
+                        ))
+                    })
                     .child(
                         button("save", save_label, true, theme)
                             .when(self.saving.is_some(), |b| b.opacity(0.7))
-                            .on_click(cx.listener(|this, _, window, cx| this.save(window, cx))),
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.save(false, window, cx)),
+                            ),
                     )
                 }
             })
