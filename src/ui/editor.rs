@@ -92,6 +92,8 @@ pub struct Editor {
     redo: Vec<Snapshot>,
     /// The edit as a handle drag found it, recorded as one undo step when the drag ends.
     drag_before: Option<Snapshot>,
+    /// Closing would throw away an edit, so the toolbar is asking first.
+    confirm_discard: bool,
 }
 
 /// `focus` must be false unless the app is active (see `app::when_active`).
@@ -121,11 +123,17 @@ pub fn open(
     };
     cx.open_window(options, |window, cx| {
         let weak = state.downgrade();
+        let editor = cx.new(|cx| Editor::new(state, path, mtm, window, cx));
+        let weak_editor = editor.downgrade();
+        // The close button asks first, like Esc and Cancel, when there's an edit to lose.
         window.on_window_should_close(cx, move |_, cx| {
+            if let Ok(false) = weak_editor.update(cx, |this, cx| this.request_close(cx)) {
+                return false;
+            }
             let _ = weak.update(cx, |s, _| s.editor_closed());
             true
         });
-        cx.new(|cx| Editor::new(state, path, mtm, window, cx))
+        editor
     })
     .inspect_err(|err| eprintln!("annuncia: editor window: {err}"))
     .ok()
@@ -216,6 +224,7 @@ impl Editor {
             undo: Vec::new(),
             redo: Vec::new(),
             drag_before: None,
+            confirm_discard: false,
         }
     }
 
@@ -416,6 +425,17 @@ impl Editor {
         cx.notify();
     }
 
+    /// Whether closing can go ahead now. With an edit to lose, it can't: the toolbar asks
+    /// whether to discard it instead.
+    fn request_close(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.edit.as_ref().is_some_and(Edit::is_edited) {
+            self.confirm_discard = true;
+            cx.notify();
+            return false;
+        }
+        true
+    }
+
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.player.pause();
         self.state.update(cx, |s, _| s.editor_closed());
@@ -526,7 +546,16 @@ impl Editor {
                 self.seek((self.playhead + delta).clamp(0., duration), true);
                 cx.notify();
             }
-            "escape" => self.close(window, cx),
+            // A second Esc keeps editing.
+            "escape" if self.confirm_discard => {
+                self.confirm_discard = false;
+                cx.notify();
+            }
+            "escape" => {
+                if self.request_close(cx) {
+                    self.close(window, cx);
+                }
+            }
             "enter" => self.save(window, cx),
             _ => {}
         }
@@ -969,6 +998,13 @@ impl Editor {
                     .px(px(4.))
                     .text_size(px(12.))
                     .map(|d| match (self.error.clone(), self.cleanup_note.clone()) {
+                        _ if self.confirm_discard => d.child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .font_weight(FontWeight::MEDIUM)
+                                .child("Discard changes?"),
+                        ),
                         (Some(error), _) => d.child(
                             div()
                                 .min_w_0()
@@ -986,15 +1022,38 @@ impl Editor {
                         (None, None) => d,
                     }),
             )
-            .child(
-                button("cancel", "Cancel", false, theme)
-                    .on_click(cx.listener(|this, _, window, cx| this.close(window, cx))),
-            )
-            .child(
-                button("save", save_label, true, theme)
-                    .when(self.saving.is_some(), |b| b.opacity(0.7))
-                    .on_click(cx.listener(|this, _, window, cx| this.save(window, cx))),
-            )
+            .map(|d| {
+                if self.confirm_discard {
+                    d.child(
+                        button("keep", "Keep editing", false, theme).on_click(cx.listener(
+                            |this, _, _, cx| {
+                                this.confirm_discard = false;
+                                cx.notify();
+                            },
+                        )),
+                    )
+                    .child(
+                        button("discard", "Discard", true, theme)
+                            .bg(theme.record)
+                            .on_click(cx.listener(|this, _, window, cx| this.close(window, cx))),
+                    )
+                } else {
+                    d.child(
+                        button("cancel", "Cancel", false, theme).on_click(cx.listener(
+                            |this, _, window, cx| {
+                                if this.request_close(cx) {
+                                    this.close(window, cx);
+                                }
+                            },
+                        )),
+                    )
+                    .child(
+                        button("save", save_label, true, theme)
+                            .when(self.saving.is_some(), |b| b.opacity(0.7))
+                            .on_click(cx.listener(|this, _, window, cx| this.save(window, cx))),
+                    )
+                }
+            })
     }
 }
 
