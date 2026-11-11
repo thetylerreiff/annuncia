@@ -1,7 +1,8 @@
 //! The editor that opens after a recording: a preview, and a waveform timeline where the
-//! recording can be split into clips, each with its own trim handles, and clips deleted. Saving re-encodes the kept
-//! parts so every cut is frame-exact, then replaces the recording (the original goes to the
-//! Trash).
+//! recording can be split into clips, each with its own trim handles, and clips deleted. Saving
+//! re-encodes the kept parts so every cut is frame-exact, then replaces the recording (the
+//! original goes to the Trash); Save as copy writes the edit beside it instead and leaves the
+//! original as it is.
 
 use std::cell::Cell;
 use std::ops::Range;
@@ -76,6 +77,8 @@ pub struct Editor {
     player: Player,
     /// `None` until the file's length and waveform have loaded.
     edit: Option<Edit>,
+    /// The recording's own frame rate, for stepping a frame at a time.
+    frame_rate: Option<f64>,
     /// Peak loudness every 1/`PEAKS_PER_SECOND` seconds.
     waveform: Vec<f32>,
     playhead: f64,
@@ -187,6 +190,7 @@ impl Editor {
         let load = path.clone();
         let task = cx.background_spawn(async move {
             let duration = media::duration(&load);
+            let frame_rate = media::frame_rate(&load);
             // One read of the audio feeds both the waveform and the pause map.
             let pcm = media::audio(&load, speech::SAMPLE_RATE as f64).unwrap_or_default();
             let waveform: Vec<f32> = pcm
@@ -194,16 +198,17 @@ impl Editor {
                 .flat_map(|chunk| media::peaks(chunk, 1))
                 .collect();
             let silences = speech::silences(&pcm, 0.3);
-            (duration, waveform, silences)
+            (duration, frame_rate, waveform, silences)
         });
         cx.spawn(async move |this, cx| {
-            let (duration, waveform, silences) = task.await;
+            let (duration, frame_rate, waveform, silences) = task.await;
             let _ = this.update(cx, |this, cx| {
                 if duration.is_finite() && duration > 0. {
                     this.edit = Some(Edit::new(duration));
                 } else {
                     this.error = Some("Couldn't read this recording".into());
                 }
+                this.frame_rate = frame_rate;
                 this.waveform = waveform;
                 this.silences = silences;
                 this.auto_clean_up(cx);
@@ -231,6 +236,7 @@ impl Editor {
             focus,
             player,
             edit: None,
+            frame_rate: None,
             waveform: Vec::new(),
             playhead: 0.,
             selected: None,
@@ -355,6 +361,16 @@ impl Editor {
         cx.notify();
     }
 
+    /// ⌫ and the Delete button: cut the words selected in the transcript if there are any,
+    /// otherwise delete or restore the selected clip.
+    fn delete(&mut self, cx: &mut Context<Self>) {
+        if self.selected_words.is_some() {
+            self.cut_words(cx);
+        } else {
+            self.toggle_selected(cx);
+        }
+    }
+
     /// Cuts the words selected in the transcript from the timeline, like a cut made there.
     fn cut_words(&mut self, cx: &mut Context<Self>) {
         let Some((first, last)) = self.selected_words.take() else {
@@ -470,6 +486,8 @@ impl Editor {
         }
         self.undo.push(before);
         self.redo.clear();
+        // The question was about the edit as it was.
+        self.confirm_discard = false;
     }
 
     /// ⌘Z, or ⇧⌘Z when `redo`.
@@ -491,13 +509,29 @@ impl Editor {
         // Undoing automatic clean up mustn't let it run again.
         self.touched = true;
         self.cleanup_note = None;
+        self.confirm_discard = false;
         cx.notify();
     }
 
-    /// Whether closing can go ahead now. With an edit to lose, it can't: the toolbar asks
-    /// whether to discard it instead.
-    fn request_close(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.edit.as_ref().is_some_and(Edit::is_edited) {
+    /// Whether the user has changed the timeline themself. Automatic clean up alone doesn't
+    /// count: closing after only looking shouldn't ask.
+    fn has_changes(&self) -> bool {
+        self.touched && self.edit.as_ref().is_some_and(Edit::is_edited)
+    }
+
+    /// Whether the toolbar is asking to discard changes, which only holds while there are some.
+    fn asking(&self) -> bool {
+        self.confirm_discard && self.has_changes() && self.saving.is_none()
+    }
+
+    /// Whether closing can go ahead now. Never while saving, which must finish to hand the
+    /// result to the app. With changes to lose, it can't either: the toolbar asks whether to
+    /// discard them instead.
+    pub fn request_close(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.saving.is_some() {
+            return false;
+        }
+        if self.has_changes() {
             self.confirm_discard = true;
             cx.notify();
             return false;
@@ -506,6 +540,10 @@ impl Editor {
     }
 
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // A save under way finishes first (its result closes the window).
+        if self.saving.is_some() {
+            return;
+        }
         self.player.pause();
         self.state.update(cx, |s, _| s.editor_closed());
         window.remove_window();
@@ -530,6 +568,7 @@ impl Editor {
         }
         self.player.pause();
         self.error = None;
+        self.confirm_discard = false;
         let progress = Arc::new(AtomicU32::new(0));
         self.saving = Some(progress.clone());
         let codec = self.state.read(cx).settings.codec;
@@ -554,11 +593,12 @@ impl Editor {
             })?;
             let out = if copy {
                 // Beside the original, numbered when the name is taken.
-                let mut out = path.with_file_name(format!("{stem} (edited).mp4"));
+                let base = unedited_stem(&stem);
+                let mut out = path.with_file_name(format!("{base} (edited).mp4"));
                 let mut n = 1;
                 while out.exists() {
                     n += 1;
-                    out = path.with_file_name(format!("{stem} (edited {n}).mp4"));
+                    out = path.with_file_name(format!("{base} (edited {n}).mp4"));
                 }
                 out
             } else {
@@ -612,10 +652,9 @@ impl Editor {
         match keystroke.key.as_str() {
             "space" => self.toggle_play(cx),
             "s" => self.split(cx),
-            "backspace" | "delete" if self.selected_words.is_some() => self.cut_words(cx),
-            "backspace" | "delete" => self.toggle_selected(cx),
-            // Trim the clip under the playhead to it.
+            "backspace" | "delete" => self.delete(cx),
             "c" => self.clean_up(cx),
+            // Trim the clip under the playhead to it.
             "i" | "o" => {
                 self.touched = true;
                 let t = self.playhead;
@@ -645,12 +684,15 @@ impl Editor {
                 self.seek((self.playhead + delta).clamp(0., duration), true);
                 cx.notify();
             }
-            // A frame back or forward, at the frame rate recordings are made at.
+            // A frame back or forward, on the recording's frame grid (the frame rate in Settings
+            // until it's read).
             "," | "." => {
                 let Some(duration) = self.edit.as_ref().map(|e| e.duration) else {
                     return;
                 };
-                let fps = f64::from(self.state.read(cx).settings.fps.max(1));
+                let fps = self
+                    .frame_rate
+                    .unwrap_or_else(|| f64::from(self.state.read(cx).settings.fps.max(1)));
                 let delta = if keystroke.key == "," { -1. } else { 1. };
                 let frame = (self.playhead * fps).round() + delta;
                 self.player.pause();
@@ -663,7 +705,7 @@ impl Editor {
             }
             "l" if !self.player.is_playing() => self.toggle_play(cx),
             // A second Esc keeps editing.
-            "escape" if self.confirm_discard => {
+            "escape" if self.asking() => {
                 self.confirm_discard = false;
                 cx.notify();
             }
@@ -1192,6 +1234,7 @@ impl Editor {
             .zip(self.selected)
             .is_some_and(|(e, i)| e.is_removed(i));
         let edited = edit.is_some_and(Edit::is_edited);
+        let asking = self.asking();
 
         let icon_text =
             |id: &'static str, name: &'static str, label: &'static str, key: &'static str| {
@@ -1242,14 +1285,16 @@ impl Editor {
                 icon_text(
                     "cut",
                     "trash",
-                    if selected_removed {
+                    if self.selected_words.is_some() {
+                        "Cut words"
+                    } else if selected_removed {
                         "Restore"
                     } else {
                         "Delete"
                     },
                     "⌫",
                 )
-                .on_click(cx.listener(|this, _, _, cx| this.toggle_selected(cx))),
+                .on_click(cx.listener(|this, _, _, cx| this.delete(cx))),
             )
             .child(
                 icon_text("cleanup", "wand", "Clean up", "C")
@@ -1272,7 +1317,7 @@ impl Editor {
                     .px(px(4.))
                     .text_size(px(12.))
                     .map(|d| match (self.error.clone(), self.cleanup_note.clone()) {
-                        _ if self.confirm_discard => d.child(
+                        _ if asking => d.child(
                             div()
                                 .min_w_0()
                                 .truncate()
@@ -1297,7 +1342,7 @@ impl Editor {
                     }),
             )
             .map(|d| {
-                if self.confirm_discard {
+                if asking {
                     d.child(
                         button("keep", "Keep editing", false, theme).on_click(cx.listener(
                             |this, _, _, cx| {
@@ -1313,13 +1358,13 @@ impl Editor {
                     )
                 } else {
                     d.child(
-                        button("cancel", "Cancel", false, theme).on_click(cx.listener(
-                            |this, _, window, cx| {
+                        button("cancel", "Cancel", false, theme)
+                            .when(self.saving.is_some(), |b| b.opacity(0.5))
+                            .on_click(cx.listener(|this, _, window, cx| {
                                 if this.request_close(cx) {
                                     this.close(window, cx);
                                 }
-                            },
-                        )),
+                            })),
                     )
                     .when(edited && self.saving.is_none(), |d| {
                         d.child(button("save-copy", "Save as copy", false, theme).on_click(
@@ -1563,6 +1608,23 @@ fn tool_button(
         .child(icon(name, 14., theme.text))
         .child(label)
         .child(keycap(key, theme.text_muted))
+}
+
+/// `stem` without the ` (edited)` or ` (edited N)` an earlier Save as copy gave it, so a copy of
+/// a copy isn't named "X (edited) (edited)".
+fn unedited_stem(stem: &str) -> &str {
+    let Some((base, tag)) = stem
+        .strip_suffix(')')
+        .and_then(|rest| rest.rsplit_once(" (edited"))
+    else {
+        return stem;
+    };
+    let numbered = |n: &str| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit());
+    if tag.is_empty() || tag.strip_prefix(' ').is_some_and(numbered) {
+        base
+    } else {
+        stem
+    }
 }
 
 /// The loudest of `peaks` (`PEAKS_PER_SECOND` apart) under each of `BARS` bars across `view`.

@@ -980,8 +980,23 @@ impl Annuncia {
     pub fn open_editor(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         // Any recording opened in the editor gets a transcript, not just new ones.
         self.transcribe(path.clone(), cx);
-        // One editor at a time: a new recording replaces whatever was open.
-        if let Some(handle) = self.editor_window.take() {
+        // One editor at a time: a new recording replaces whatever was open, unless the user has
+        // changes there. Then that editor stays, forward and asking whether to discard them,
+        // and the new recording can still be edited from the notch.
+        if let Some(handle) = self.editor_window {
+            let keep = handle
+                .update(cx, |editor, window, cx| {
+                    let keep = !editor.request_close(cx);
+                    if keep {
+                        window.activate_window();
+                    }
+                    keep
+                })
+                .unwrap_or(false);
+            if keep {
+                return;
+            }
+            self.editor_window = None;
             cx.defer(move |cx| {
                 let _ = handle.update(cx, |_, window, _| window.remove_window());
             });
@@ -1289,7 +1304,7 @@ impl Annuncia {
         if !self.phase.is_active() {
             self.phase = Phase::Saved {
                 path,
-                until: Instant::now() + Duration::from_secs(8),
+                until: Instant::now() + Duration::from_secs(20),
             };
             self.sync_windows(cx);
         }
@@ -1306,7 +1321,7 @@ impl Annuncia {
         if !self.phase.is_active() {
             self.phase = Phase::Saved {
                 path,
-                until: Instant::now() + Duration::from_secs(8),
+                until: Instant::now() + Duration::from_secs(20),
             };
             self.sync_windows(cx);
         }
