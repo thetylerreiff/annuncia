@@ -9,9 +9,10 @@ pub mod settings_view;
 pub mod transcript_view;
 
 use gpui::{
-    App, Bounds, ClickEvent, Div, ElementId, Hsla, InteractiveElement as _, IntoElement,
-    ParentElement as _, SharedString, StatefulInteractiveElement as _, Styled as _, Window, canvas,
-    div, fill, hsla, point, prelude::FluentBuilder as _, px, rgb, size,
+    AnyView, App, AppContext as _, Bounds, ClickEvent, Context, Div, ElementId, Hsla,
+    InteractiveElement as _, IntoElement, ParentElement as _, Render, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Window, canvas, div, fill, hsla, point,
+    prelude::FluentBuilder as _, px, rgb, size,
 };
 
 /// The accent: electric blue, used only for what's on or selected.
@@ -40,7 +41,14 @@ pub struct Theme {
     pub control_hover: Hsla,
     pub control_active: Hsla,
     pub accent: Hsla,
+    /// A lighter tint of the accent for text and glyphs on black, where the accent itself is
+    /// only about 3.3:1.
+    pub accent_soft: Hsla,
     pub accent_text: Hsla,
+    /// Healthy / granted.
+    pub ok: Hsla,
+    /// Needs attention, but nothing is broken.
+    pub warn: Hsla,
     pub record: Hsla,
     /// A starfield behind Settings, the library and the panel, which marks a nightly build.
     pub stars: bool,
@@ -74,7 +82,10 @@ impl Theme {
             control_hover: hsla(0., 0., 1., 0.11),
             control_active: hsla(0., 0., 1., 0.17),
             accent: rgb(ACCENT).into(),
+            accent_soft: rgb(0x8c8cff).into(),
             accent_text: hsla(0., 0., 1., 1.),
+            ok: rgb(0x30d158).into(),
+            warn: rgb(0xffd60a).into(),
             record: rgb(0xff453a).into(),
             stars: false,
         }
@@ -253,4 +264,58 @@ pub fn keycap(label: impl Into<SharedString>, color: Hsla) -> impl IntoElement {
         .text_size(px(11.))
         .text_color(color)
         .child(label.into())
+}
+
+/// A tooltip for `.tooltip(...)` on any element with an id: `.tooltip(tip("Stop recording"))`.
+pub fn tip(text: impl Into<SharedString>) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
+    let text = text.into();
+    move |_, cx| {
+        let text = text.clone();
+        cx.new(|_| Tip { text, key: None }).into()
+    }
+}
+
+/// Like [`tip`], with the shortcut in a keycap after the text.
+pub fn tip_with_key(
+    text: impl Into<SharedString>,
+    key: impl Into<SharedString>,
+) -> impl Fn(&mut Window, &mut App) -> AnyView + 'static {
+    let text = text.into();
+    let key = key.into();
+    move |_, cx| {
+        let (text, key) = (text.clone(), key.clone());
+        cx.new(|_| Tip {
+            text,
+            key: Some(key),
+        })
+        .into()
+    }
+}
+
+/// The view behind [`tip`]: a small label of black glass.
+struct Tip {
+    text: SharedString,
+    key: Option<SharedString>,
+}
+
+impl Render for Tip {
+    fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::for_window(window);
+        div()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .px(px(7.))
+            .py(px(4.))
+            .rounded(px(6.))
+            .bg(hsla(0., 0., 0.1, 0.96))
+            .border_1()
+            .border_color(theme.control_active)
+            .text_size(px(11.5))
+            .text_color(theme.text)
+            .child(self.text.clone())
+            .when_some(self.key.clone(), |d, key| {
+                d.child(keycap(key, theme.text_muted))
+            })
+    }
 }
