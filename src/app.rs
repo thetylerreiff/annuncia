@@ -1137,7 +1137,7 @@ impl Annuncia {
         if !self.phase.is_active() {
             self.phase = Phase::Saved {
                 path,
-                until: Instant::now() + Duration::from_secs(8),
+                until: Instant::now() + Duration::from_secs(20),
             };
             self.sync_windows(cx);
         }
@@ -1154,7 +1154,7 @@ impl Annuncia {
         if !self.phase.is_active() {
             self.phase = Phase::Saved {
                 path,
-                until: Instant::now() + Duration::from_secs(8),
+                until: Instant::now() + Duration::from_secs(20),
             };
             self.sync_windows(cx);
         }
