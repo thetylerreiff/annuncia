@@ -102,6 +102,40 @@ impl Edit {
         }
     }
 
+    /// Removes `range` from what's kept, the way it's done by hand: a clip it covers is
+    /// deleted, a clip it overlaps at one end is trimmed back to it, and a clip it falls inside
+    /// is split in its middle with both sides trimmed back to its edges. What's already cut
+    /// stays as it is, and the last kept clip is never deleted. Returns whether anything changed.
+    pub fn cut(&mut self, range: Range<f64>) -> bool {
+        let before = self.clips.clone();
+        let mut i = 0;
+        while i < self.clips.len() {
+            let clip = self.clips[i];
+            let (lo, hi) = (range.start.max(clip.start), range.end.min(clip.end));
+            if !clip.removed && hi > lo {
+                // Whether enough of the clip is left on either side of the cut to keep.
+                match (lo - clip.start >= MIN_CLIP, clip.end - hi >= MIN_CLIP) {
+                    (true, true) => {
+                        if self.split((lo + hi) / 2.) {
+                            self.set_end(i, lo);
+                            self.set_start(i + 1, hi);
+                            i += 1;
+                        }
+                    }
+                    (true, false) => self.set_end(i, lo),
+                    (false, true) => self.set_start(i, hi),
+                    (false, false) => {
+                        if self.clips.iter().filter(|c| !c.removed).count() > 1 {
+                            self.clips[i].removed = true;
+                        }
+                    }
+                }
+            }
+            i += 1;
+        }
+        self.clips != before
+    }
+
     pub fn reset(&mut self) {
         *self = Self::new(self.duration);
     }

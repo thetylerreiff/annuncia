@@ -47,13 +47,6 @@ pub struct Plan {
     pub cuts: Vec<Range<f64>>,
 }
 
-impl Plan {
-    /// How much shorter the edited video is than the original.
-    pub fn saved(&self, duration: f64) -> f64 {
-        duration - (self.end - self.start) + self.cuts.iter().map(|c| c.end - c.start).sum::<f64>()
-    }
-}
-
 pub fn is_filler(text: &str) -> bool {
     let word: String = text
         .chars()
@@ -119,19 +112,16 @@ pub fn plan(duration: f64, silences: &[Range<f64>], words: Option<&[Piece]>) -> 
     }
 }
 
-/// Replaces `edit` with the plan: trimmed ends, and each cut as a split in its middle with the
-/// clips on either side trimmed back to its edges.
-pub fn apply(plan: &Plan, edit: &mut Edit) {
-    edit.reset();
-    edit.set_start(0, plan.start);
-    edit.set_end(0, plan.end);
-    for cut in &plan.cuts {
-        let mid = (cut.start + cut.end) / 2.;
-        if !edit.split(mid) {
-            continue;
+/// Adds the plan to `edit`: dead air at both ends and each cut, made with `Edit::cut` and only
+/// where something is still kept, so cuts and trims made by hand stay as they are. Returns how
+/// many of the plan's spots changed the edit.
+pub fn apply(plan: &Plan, edit: &mut Edit) -> usize {
+    let ends = [0.0..plan.start, plan.end..edit.duration];
+    let mut spots = 0;
+    for cut in ends.into_iter().chain(plan.cuts.iter().cloned()) {
+        if edit.cut(cut) {
+            spots += 1;
         }
-        let right = edit.clip_at(mid);
-        edit.set_end(right - 1, cut.start);
-        edit.set_start(right, cut.end);
     }
+    spots
 }

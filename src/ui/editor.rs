@@ -318,27 +318,31 @@ impl Editor {
         }
     }
 
-    /// Replaces the edit with automatic cuts: dead air, long pauses, and (when `fillers` and a
-    /// transcript is ready) filler words.
+    /// Adds automatic cuts to the edit: dead air, long pauses, and (when `fillers` and a
+    /// transcript is ready) filler words. Cuts made by hand stay.
     fn apply_clean_up(&mut self, fillers: bool, cx: &mut Context<Self>) {
         let transcript = fillers.then(|| self.transcript(cx)).flatten();
         let before = self.snapshot();
         let Some(edit) = &mut self.edit else { return };
+        // Until it's touched, the edit holds nothing but earlier automatic clean up, which this
+        // redoes in full so the note counts all of it.
+        if !self.touched {
+            edit.reset();
+        }
         let plan = cleanup::plan(
             edit.duration,
             &self.silences,
             transcript.as_ref().map(|t| t.pieces.as_slice()),
         );
-        cleanup::apply(&plan, edit);
-        let spots =
-            plan.cuts.len() + usize::from(plan.start > 0.) + usize::from(plan.end < edit.duration);
+        let from = edit.kept_duration();
+        let spots = cleanup::apply(&plan, edit);
         self.cleanup_note = Some(if spots == 0 {
             "Nothing to clean up".into()
         } else {
             format!(
-                "Cleaned up {spots} {}, {} shorter",
+                "Cleaned up {spots} {}, {} shorter. ⌘Z to undo",
                 if spots == 1 { "spot" } else { "spots" },
-                timestamp(plan.saved(edit.duration))
+                timestamp(from - edit.kept_duration())
             )
             .into()
         });
@@ -347,7 +351,7 @@ impl Editor {
         cx.notify();
     }
 
-    /// The Clean up button: everything it can find, replacing the current edit.
+    /// The Clean up button: everything it can find, added to the current edit.
     fn clean_up(&mut self, cx: &mut Context<Self>) {
         self.touched = true;
         self.apply_clean_up(true, cx);
