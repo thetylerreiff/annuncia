@@ -15,7 +15,7 @@ use crate::app::{self, Annuncia};
 use crate::native::{self, OverlayLevel, TopLeftRect, WindowSetup};
 use crate::settings::{CaptureMode, tilde};
 use crate::ui::icons::icon;
-use crate::ui::{Theme, keycap};
+use crate::ui::{Theme, keycap, tip};
 
 const WIDTH: f64 = 320.;
 const RADIUS: f64 = 18.;
@@ -393,14 +393,22 @@ impl Render for Launcher {
                     .text_color(theme.text_muted)
                     .child(format!("Saves to {}", tilde(&save_dir))),
             )
-            .child(icon_button("library", "library", theme).on_click({
-                let handle = handle.clone();
-                move |_, _, cx| handle.update(cx, |s, cx| s.open_library(cx))
-            }))
-            .child(icon_button("settings", "gear", theme).on_click({
-                let handle = handle.clone();
-                move |_, _, cx| handle.update(cx, |s, cx| s.open_settings(cx))
-            }));
+            .child(
+                icon_button("library", "library", theme)
+                    .tooltip(tip("Library"))
+                    .on_click({
+                        let handle = handle.clone();
+                        move |_, _, cx| handle.update(cx, |s, cx| s.open_library(cx))
+                    }),
+            )
+            .child(
+                icon_button("settings", "gear", theme)
+                    .tooltip(tip("Settings"))
+                    .on_click({
+                        let handle = handle.clone();
+                        move |_, _, cx| handle.update(cx, |s, cx| s.open_settings(cx))
+                    }),
+            );
 
         let (applied, origin) = (self.applied.clone(), self.origin);
         let content = div()
@@ -656,14 +664,21 @@ impl Launcher {
         let this = this.clone();
         let handle = self.state.clone();
         let open = self.picker == Some(picker);
+        let toggle_tip = format!(
+            "Turn {} {}",
+            label.to_lowercase(),
+            if enabled { "off" } else { "on" }
+        );
+        // The picker half lights up on its own, so the tile reads as two controls.
         tile(theme)
-            .gap(px(10.))
+            .gap(px(4.))
             .pl(px(10.))
             .child(
                 div()
                     .id(SharedString::from(format!("{id}-toggle")))
                     .cursor_pointer()
                     .hover(|s| s.opacity(0.85))
+                    .tooltip(tip(toggle_tip))
                     .on_click(move |_, _, cx| {
                         handle.update(cx, |s, cx| s.update_settings(cx, &flip))
                     })
@@ -678,8 +693,11 @@ impl Launcher {
                     .items_center()
                     .gap(px(8.))
                     .py(px(9.))
+                    .pl(px(6.))
                     .pr(px(10.))
+                    .rounded(px(TILE))
                     .cursor_pointer()
+                    .hover(|s| s.bg(theme.tile_hover))
                     .on_click(move |_, _, cx| {
                         this.update(cx, |this, cx| {
                             this.picker = if open { None } else { Some(picker) };
@@ -754,7 +772,7 @@ impl Launcher {
                     })
                     .child(div().truncate().child(name))
                     .when(is_selected, |d| {
-                        d.child(div().text_color(theme.accent).child("✓"))
+                        d.child(div().text_color(theme.accent_soft).child("✓"))
                     })
             }))
             .into_any_element()
