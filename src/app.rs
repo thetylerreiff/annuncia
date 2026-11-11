@@ -668,16 +668,18 @@ impl Annuncia {
                     // The bubble stays up through `Stopping`, so going straight into the
                     // countdown doesn't flicker it.
                     state.phase = Phase::Idle;
+                    state.start_recording(cx);
+                    // After starting, which clears the notice.
                     if let Err(err) = result {
-                        state.post(
+                        state.show(
                             Notice::error(
                                 "Couldn't restart cleanly",
                                 "The take was thrown away, but capture didn't stop as expected.",
                             )
                             .detail(format!("{err:#}")),
+                            cx,
                         );
                     }
-                    state.start_recording(cx);
                     return;
                 }
                 if let Ok(Some(path)) = &result {
