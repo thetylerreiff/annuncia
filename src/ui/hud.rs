@@ -10,10 +10,11 @@ use gpui::{
     point, prelude::FluentBuilder as _, pulsating_between, px, rgb,
 };
 
-use crate::app::{self, Annuncia, End, Phase, TranscriptState};
+use crate::app::{self, Annuncia, End, Notice, Phase, Severity, TranscriptState};
 use crate::hotkeys::display_binding;
 use crate::models::Transcription;
 use crate::native::{self, MenuBarGeometry, OverlayLevel, TopLeftRect};
+use crate::ui::Theme;
 use crate::ui::icons::icon;
 
 /// Each side of the notch: the timer on the left, pause and stop on the right.
@@ -28,7 +29,10 @@ const CAPSULE_HEIGHT: f64 = 30.;
 const BUTTON: f32 = 24.;
 const RECORD: u32 = 0xff453a;
 const SAVED_DRAWER: f64 = 38.;
-const NOTICE_DRAWER: f64 = 72.;
+/// Notice text sets its own line height, so the drawer can be sized before layout.
+const NOTICE_LINE: f32 = 15.;
+/// The most lines a notice gets, title and error chain included.
+const NOTICE_LINES: usize = 6;
 const DRAWER_WIDTH: f64 = 370.;
 
 pub struct Hud {
@@ -113,16 +117,16 @@ fn white(a: f32) -> Hsla {
 
 impl Render for Hud {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::for_window(window);
         let state = self.state.read(cx);
         let recording = matches!(state.phase, Phase::Recording { .. });
         let expanded = recording && self.hovered;
-        let (drawer_height, min_width) = if state.notice.is_some() {
-            (NOTICE_DRAWER, DRAWER_WIDTH)
-        } else if matches!(state.phase, Phase::Saved { .. }) {
-            (SAVED_DRAWER, DRAWER_WIDTH)
-        } else {
-            (0., 0.)
-        };
+        // A notice sits above the saved file's buttons rather than hiding them.
+        let notice = state.notice.clone();
+        let saved = matches!(state.phase, Phase::Saved { .. });
+        let notice_height = notice.as_ref().map_or(0., notice_height);
+        let drawer_height = notice_height + if saved { SAVED_DRAWER } else { 0. };
+        let min_width = if drawer_height > 0. { DRAWER_WIDTH } else { 0. };
         if !recording {
             self.confirm_restart_until = None;
         }
@@ -132,7 +136,7 @@ impl Render for Hud {
             native::set_frame(window, cx, rect);
         }
 
-        let (left, right) = self.wings(expanded, cx);
+        let (left, right) = self.wings(expanded, theme, cx);
         let notch = self.geometry.notch;
         let bar_height = px(notch.map_or(CAPSULE_HEIGHT, |n| n.h) as f32);
 
@@ -168,7 +172,14 @@ impl Render for Hud {
                     .child(right),
             );
 
-        let drawer = (drawer_height > 0.).then(|| self.drawer(drawer_height, cx));
+        let drawer = (drawer_height > 0.).then(|| {
+            div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .children(notice.map(|n| self.notice_drawer(n, notice_height, cx)))
+                .children(saved.then(|| self.drawer(SAVED_DRAWER, cx)))
+        });
         let body = div()
             .flex_1()
             .h_full()
@@ -239,7 +250,12 @@ impl Hud {
         .detach();
     }
 
-    fn wings(&self, expanded: bool, cx: &mut Context<Self>) -> (AnyElement, AnyElement) {
+    fn wings(
+        &self,
+        expanded: bool,
+        theme: Theme,
+        cx: &mut Context<Self>,
+    ) -> (AnyElement, AnyElement) {
         let state = self.state.read(cx);
         let record = rgb(RECORD);
         match &state.phase {
@@ -350,16 +366,89 @@ impl Hud {
                 self.icon_button("dismiss", "✕", white(0.7), |s, cx| s.dismiss_saved(cx))
                     .into_any_element(),
             ),
-            Phase::Idle => (
-                div()
-                    .flex()
-                    .items_center()
-                    .child(div().size(px(8.)).rounded_full().bg(rgb(0xffd60a)))
-                    .into_any_element(),
-                self.icon_button("dismiss", "✕", white(0.7), |s, cx| s.dismiss_saved(cx))
-                    .into_any_element(),
-            ),
+            Phase::Idle => {
+                let error = state
+                    .notice
+                    .as_ref()
+                    .is_some_and(|n| n.severity == Severity::Error);
+                (
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .child(div().size(px(8.)).rounded_full().bg(if error {
+                            theme.record
+                        } else {
+                            theme.warn
+                        }))
+                        .child(label(if error { "Error" } else { "Notice" }, white(0.92)))
+                        .into_any_element(),
+                    self.icon_button("dismiss", "✕", white(0.7), |s, cx| s.dismiss_saved(cx))
+                        .into_any_element(),
+                )
+            }
         }
+    }
+
+    /// The notice: a bold title for errors, the message, and the error chain muted below it.
+    fn notice_drawer(&self, notice: Notice, height: f64, cx: &mut Context<Self>) -> Div {
+        let (message_lines, detail_lines) = notice_lines(&notice);
+        // Idle or saved, the bar's ✕ dismisses it; otherwise that end of the bar holds the
+        // recording's controls, and an error waits to be dismissed.
+        let own_dismiss = notice.severity == Severity::Error
+            && !matches!(self.state.read(cx).phase, Phase::Idle | Phase::Saved { .. });
+        div()
+            .h(px(height as f32))
+            .w_full()
+            .px(px(10.))
+            .pb(px(6.))
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .text_size(px(11.5))
+                    .line_height(px(NOTICE_LINE))
+                    .when_some(notice.title, |d, title| {
+                        d.child(
+                            div()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(gpui::white())
+                                .truncate()
+                                .child(title),
+                        )
+                    })
+                    .child(
+                        div()
+                            .text_color(white(0.85))
+                            .line_clamp(message_lines)
+                            .child(notice.message),
+                    )
+                    .when_some(notice.detail, |d, detail| {
+                        d.child(
+                            div()
+                                .text_color(white(0.45))
+                                .line_clamp(detail_lines)
+                                .child(detail),
+                        )
+                    }),
+            )
+            .when_some(notice.action, |d, (label, url)| {
+                d.child(drawer_button("notice-action", label, true, move |_, _| {
+                    native::open(url)
+                }))
+            })
+            .when(own_dismiss, |d| {
+                d.child(
+                    self.icon_button("notice-dismiss", "✕", white(0.7), |s, cx| {
+                        s.dismiss_notice(cx)
+                    }),
+                )
+            })
     }
 
     fn drawer(&self, height: f64, cx: &mut Context<Self>) -> Div {
@@ -372,23 +461,6 @@ impl Hud {
             .flex()
             .items_center()
             .gap(px(6.));
-
-        if let Some(notice) = state.notice.clone() {
-            return base
-                .child(
-                    div()
-                        .flex_1()
-                        .text_size(px(11.5))
-                        .text_color(white(0.85))
-                        .line_clamp(4)
-                        .child(notice.message),
-                )
-                .when_some(notice.action, |d, (label, url)| {
-                    d.child(drawer_button("notice-action", label, true, move |_, _| {
-                        native::open(url)
-                    }))
-                });
-        }
 
         let Phase::Saved { path, .. } = &state.phase else {
             return base;
@@ -615,6 +687,28 @@ impl Hud {
             .on_click(move |_, _, cx| state.update(cx, |s, cx| on_click(s, cx)))
             .child(glyph)
     }
+}
+
+/// How many lines the message and the error chain get. Text can't be measured before the window
+/// is sized, so this guesses from its length (about 6 px a character).
+fn notice_lines(notice: &Notice) -> (usize, usize) {
+    fn lines(text: &str, per_line: usize) -> usize {
+        text.chars().count().div_ceil(per_line).max(1)
+    }
+    let per_line = if notice.action.is_some() { 36 } else { 50 };
+    let title = usize::from(notice.title.is_some());
+    let detail = notice
+        .detail
+        .as_ref()
+        .map_or(0, |d| lines(d, per_line).min(2));
+    let message = lines(&notice.message, per_line).min(NOTICE_LINES - title - detail);
+    (message, detail)
+}
+
+fn notice_height(notice: &Notice) -> f64 {
+    let (message, detail) = notice_lines(notice);
+    let title = usize::from(notice.title.is_some());
+    (title + message + detail) as f64 * f64::from(NOTICE_LINE) + 18.
 }
 
 fn label(text: &'static str, color: Hsla) -> impl IntoElement {

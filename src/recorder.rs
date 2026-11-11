@@ -150,7 +150,7 @@ pub fn start(req: StartRequest, events: Sender<RecorderEvent>) -> Result<Session
     let find_window = |id: u32| windows.iter().find(|w| w.window_id() == id);
     let displays = content.displays();
     if displays.is_empty() {
-        bail!("No displays available to record");
+        bail!("There's no display to record.");
     }
 
     let (filter, source_rect) = match &req.target {
@@ -175,7 +175,8 @@ pub fn start(req: StartRequest, events: Sender<RecorderEvent>) -> Result<Session
             (filter, None)
         }
         Target::Window { window_id } => {
-            let window = find_window(*window_id).context("That window is no longer available")?;
+            let window =
+                find_window(*window_id).context("That window has closed. Pick another one.")?;
             let frame = window.frame();
             let center = (
                 frame.origin.x + frame.size.width / 2.,
@@ -242,7 +243,12 @@ pub fn start(req: StartRequest, events: Sender<RecorderEvent>) -> Result<Session
     }
 
     if let Some(dir) = req.path.parent() {
-        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+        std::fs::create_dir_all(dir).with_context(|| {
+            format!(
+                "Couldn't create the recordings folder at {}.",
+                dir.display()
+            )
+        })?;
     }
     // Parts go to the cache, not the recordings folder, which is often synced to iCloud.
     let stem = req
@@ -254,8 +260,12 @@ pub fn start(req: StartRequest, events: Sender<RecorderEvent>) -> Result<Session
         .join("Annuncia")
         .join("parts")
         .join(stem);
-    std::fs::create_dir_all(&parts_dir)
-        .with_context(|| format!("creating {}", parts_dir.display()))?;
+    std::fs::create_dir_all(&parts_dir).with_context(|| {
+        format!(
+            "Couldn't create a working folder at {}.",
+            parts_dir.display()
+        )
+    })?;
 
     let mut stream = SCStream::new(&filter, &config)?;
     // Keeps frames flowing (and the stream alive) while no recording output is attached, and
@@ -276,14 +286,15 @@ pub fn start(req: StartRequest, events: Sender<RecorderEvent>) -> Result<Session
     session
         .stream
         .start_capture()
-        .map_err(|e| anyhow!("Could not start capture: {e}"))?;
+        .map_err(|e| anyhow!("The screen capture didn't start ({e})."))?;
     Ok(session)
 }
 
 /// Moves `from` to `to`, copying when they're on different volumes.
 fn move_file(from: &Path, to: &Path) -> Result<()> {
     if std::fs::rename(from, to).is_err() {
-        std::fs::copy(from, to).with_context(|| format!("saving {}", to.display()))?;
+        std::fs::copy(from, to)
+            .with_context(|| format!("Couldn't save the recording to {}.", to.display()))?;
         let _ = std::fs::remove_file(from);
     }
     Ok(())
@@ -298,7 +309,7 @@ impl Session {
             .join(format!("part-{}.mp4", self.parts.len() + 1));
         let config = SCRecordingOutputConfiguration::new()?
             .with_output_url(&path)
-            .map_err(|e| anyhow!("invalid output path: {e:?}"))?
+            .map_err(|e| anyhow!("Couldn't record to {} ({e:?}).", path.display()))?
             .with_video_codec(match self.codec {
                 Codec::H264 => SCRecordingOutputCodec::H264,
                 Codec::Hevc => SCRecordingOutputCodec::HEVC,
@@ -326,7 +337,7 @@ impl Session {
         if let Some(part) = self.part.take() {
             self.stream
                 .remove_recording_output(&part.output)
-                .map_err(|e| anyhow!("Could not pause: {e}"))?;
+                .map_err(|e| anyhow!("Pausing the capture didn't work ({e})."))?;
             part.wait();
         }
         Ok(())
@@ -339,7 +350,7 @@ impl Session {
         let part = self.next_part()?;
         if let Err(e) = self.stream.add_recording_output(&part.output) {
             self.parts.pop();
-            return Err(anyhow!("Could not resume: {e}"));
+            return Err(anyhow!("Resuming the capture didn't work ({e})."));
         }
         self.part = Some(part);
         Ok(())
@@ -351,7 +362,7 @@ impl Session {
         let stopped = self
             .stream
             .stop_capture()
-            .map_err(|e| anyhow!("Could not stop capture: {e}"));
+            .map_err(|e| anyhow!("The screen capture didn't stop cleanly ({e})."));
         if let Some(part) = self.part.take() {
             part.wait();
         }
@@ -367,7 +378,7 @@ impl Session {
             .cloned()
             .collect();
         match parts.as_slice() {
-            [] => bail!("Nothing was recorded"),
+            [] => bail!("Nothing was recorded."),
             [only] => move_file(only, &self.path)?,
             _ => {
                 if let Err(err) = crate::media::join(&parts, &self.path) {
@@ -382,7 +393,9 @@ impl Session {
                         let _ = move_file(part, &self.path.with_file_name(name));
                     }
                     let _ = std::fs::remove_dir_all(&self.parts_dir);
-                    return Err(err.context("Saved the recording in parts"));
+                    return Err(
+                        err.context("Couldn't join the parts, so they were saved separately")
+                    );
                 }
             }
         }
