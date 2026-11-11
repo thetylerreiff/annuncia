@@ -171,7 +171,7 @@ impl Camera {
             let device = device_id
                 .and_then(|id| AVCaptureDevice::deviceWithUniqueID(&NSString::from_str(id)))
                 .or_else(|| AVCaptureDevice::defaultDeviceWithMediaType(video))
-                .context("No camera found")?;
+                .context("No camera is connected.")?;
 
             let session = AVCaptureSession::new();
             session.beginConfiguration();
@@ -182,13 +182,13 @@ impl Camera {
             let input =
                 AVCaptureDeviceInput::deviceInputWithDevice_error(&device).map_err(|e| {
                     anyhow!(
-                        "Could not open {}: {}",
+                        "Couldn't open {}: {}",
                         device.localizedName(),
                         e.localizedDescription()
                     )
                 })?;
             if !session.canAddInput(&input) {
-                return Err(anyhow!("Camera is busy"));
+                return Err(anyhow!("The camera may be in use by another app."));
             }
             session.addInput(&input);
 

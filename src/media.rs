@@ -168,7 +168,7 @@ pub(crate) fn render(
                             cursor.add(time(start - range.start)),
                         )
                         .map_err(|e| anyhow!("{}", e.localizedDescription()))
-                        .with_context(|| format!("reading {}", source.path.display()))?;
+                        .with_context(|| format!("Couldn't read {}", source.path.display()))?;
                 }
                 cursor = cursor.add(time(range.end - range.start));
             }

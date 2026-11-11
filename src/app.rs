@@ -102,11 +102,59 @@ pub enum End {
     Restart,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Severity {
+    Info,
+    /// Something failed: a red dot and a title, and it stays until dismissed.
+    Error,
+}
+
 #[derive(Clone)]
 pub struct Notice {
+    pub severity: Severity,
+    /// A short bold line above the message, for errors ("Couldn't start recording").
+    pub title: Option<SharedString>,
+    /// A plain sentence: what happened and what to do.
     pub message: SharedString,
+    /// The technical error chain, shown muted under the message so it can still be reported.
+    pub detail: Option<SharedString>,
     pub action: Option<(SharedString, &'static str)>,
-    pub until: Instant,
+    /// When an info notice goes away; errors wait to be dismissed.
+    pub until: Option<Instant>,
+}
+
+impl Notice {
+    pub fn info(message: impl Into<SharedString>) -> Self {
+        Self {
+            severity: Severity::Info,
+            title: None,
+            message: message.into(),
+            detail: None,
+            action: None,
+            until: Some(Instant::now() + Duration::from_secs(10)),
+        }
+    }
+
+    pub fn error(title: &'static str, message: impl Into<SharedString>) -> Self {
+        Self {
+            severity: Severity::Error,
+            title: Some(title.into()),
+            message: message.into(),
+            detail: None,
+            action: None,
+            until: None,
+        }
+    }
+
+    pub fn detail(mut self, detail: impl Into<SharedString>) -> Self {
+        self.detail = Some(detail.into());
+        self
+    }
+
+    pub fn action(mut self, action: Option<(SharedString, &'static str)>) -> Self {
+        self.action = action;
+        self
+    }
 }
 
 pub struct Annuncia {
@@ -297,6 +345,10 @@ impl Annuncia {
     fn pump(&mut self, cx: &mut Context<Self>) {
         for action in self.tray.poll() {
             match action {
+                // The recorder can't open mid-recording, so a click there stops it instead.
+                TrayAction::Clicked if matches!(self.phase, Phase::Recording { .. }) => {
+                    self.stop_recording(cx)
+                }
                 TrayAction::Clicked | TrayAction::OpenLauncher => self.toggle_launcher(cx),
                 TrayAction::ToggleRecording => self.toggle_recording(cx),
                 TrayAction::TogglePause => self.toggle_pause(cx),
@@ -369,7 +421,11 @@ impl Annuncia {
             }
             _ => {}
         }
-        if self.notice.as_ref().is_some_and(|n| now >= n.until) {
+        if self
+            .notice
+            .as_ref()
+            .is_some_and(|n| n.until.is_some_and(|until| now >= until))
+        {
             self.notice = None;
             self.sync_windows(cx);
         }
@@ -498,10 +554,22 @@ impl Annuncia {
                 }
                 Err(err) => {
                     state.phase = Phase::Idle;
-                    let action = format!("{err:#}")
-                        .contains("Screen Recording")
-                        .then_some(("Open Settings".into(), Permission::Screen.settings_url()));
-                    state.show_notice(format!("{err:#}"), action, cx);
+                    let chain = format!("{err:#}");
+                    // The permission error is already a sentence, with nothing more to report.
+                    let notice = if chain.contains("Screen Recording") {
+                        Notice::error("Couldn't start recording", err.to_string()).action(Some((
+                            "Open Settings".into(),
+                            Permission::Screen.settings_url(),
+                        )))
+                    } else {
+                        Notice::error(
+                            "Couldn't start recording",
+                            "Nothing was recorded. Try again, and if it keeps happening, \
+                             quit and reopen Annuncia.",
+                        )
+                        .detail(chain)
+                    };
+                    state.show(notice, cx);
                 }
             });
         })
@@ -563,7 +631,18 @@ impl Annuncia {
                     }
                 }
                 if let Err(err) = result {
-                    state.set_notice(format!("{err:#}"), None);
+                    let notice = if pausing {
+                        Notice::error(
+                            "Couldn't pause",
+                            "The recording is still running. Try again, or stop to save it.",
+                        )
+                    } else {
+                        Notice::error(
+                            "Couldn't resume",
+                            "The recording is still paused. Try again, or stop to save it.",
+                        )
+                    };
+                    state.post(notice.detail(format!("{err:#}")));
                 }
                 state.sync_tray();
                 if let Some(end) = state.pending_finish.take() {
@@ -597,7 +676,13 @@ impl Annuncia {
                     // countdown doesn't flicker it.
                     state.phase = Phase::Idle;
                     if let Err(err) = result {
-                        state.set_notice(format!("{err:#}"), None);
+                        state.post(
+                            Notice::error(
+                                "Couldn't restart cleanly",
+                                "The take was thrown away, but capture didn't stop as expected.",
+                            )
+                            .detail(format!("{err:#}")),
+                        );
                     }
                     state.start_recording(cx);
                     return;
@@ -617,11 +702,24 @@ impl Annuncia {
                 state.phase = match result {
                     Ok(Some(path)) => Phase::Saved {
                         path,
-                        until: Instant::now() + Duration::from_secs(8),
+                        until: Instant::now() + Duration::from_secs(20),
                     },
                     Ok(None) => Phase::Idle,
                     Err(err) => {
-                        state.set_notice(format!("{err:#}"), None);
+                        state.post(
+                            match end {
+                                End::Discard => Notice::error(
+                                    "Couldn't discard cleanly",
+                                    "The take was thrown away, but capture didn't stop as \
+                                     expected.",
+                                ),
+                                _ => Notice::error(
+                                    "Couldn't save the recording",
+                                    "Anything Annuncia could keep is in your recordings folder.",
+                                ),
+                            }
+                            .detail(format!("{err:#}")),
+                        );
                         Phase::Idle
                     }
                 };
@@ -642,7 +740,14 @@ impl Annuncia {
     fn on_recorder_event(&mut self, event: RecorderEvent, cx: &mut Context<Self>) {
         match event {
             RecorderEvent::Failed(err) => {
-                self.set_notice(format!("Recording failed: {err}"), None);
+                self.post(
+                    Notice::error(
+                        "Recording stopped early",
+                        "Something interrupted the capture. What was recorded until then is \
+                         being saved.",
+                    )
+                    .detail(err),
+                );
                 // Keep whatever was recorded before the failure.
                 if matches!(self.phase, Phase::Recording { .. }) {
                     self.finish(End::Save, cx);
@@ -670,6 +775,13 @@ impl Annuncia {
         self.sync_windows(cx);
     }
 
+    /// Clears the notice, keeping a saved recording's drawer.
+    pub fn dismiss_notice(&mut self, cx: &mut Context<Self>) {
+        self.notice = None;
+        self.sync_windows(cx);
+        cx.notify();
+    }
+
     /// Keeps the "saved" HUD up while the pointer is on it.
     pub fn hold_saved(&mut self) {
         if let Phase::Saved { until, .. } = &mut self.phase {
@@ -677,6 +789,7 @@ impl Annuncia {
         }
     }
 
+    /// Shows an info notice, which goes away by itself.
     pub fn show_notice(
         &mut self,
         message: impl Into<SharedString>,
@@ -688,17 +801,24 @@ impl Annuncia {
         cx.notify();
     }
 
-    /// Sets the notice without reconciling windows; for use inside `sync_windows`.
+    /// Sets an info notice without reconciling windows; for use inside `sync_windows`.
     fn set_notice(
         &mut self,
         message: impl Into<SharedString>,
         action: Option<(SharedString, &'static str)>,
     ) {
-        self.notice = Some(Notice {
-            message: message.into(),
-            action,
-            until: Instant::now() + Duration::from_secs(10),
-        });
+        self.post(Notice::info(message).action(action));
+    }
+
+    pub fn show(&mut self, notice: Notice, cx: &mut Context<Self>) {
+        self.post(notice);
+        self.sync_windows(cx);
+        cx.notify();
+    }
+
+    /// Sets the notice without reconciling windows; for use inside `sync_windows`.
+    fn post(&mut self, notice: Notice) {
+        self.notice = Some(notice);
     }
 
     // MARK: settings & devices
@@ -715,7 +835,14 @@ impl Annuncia {
             self.hotkey_problems = hotkeys.apply(&self.settings.hotkeys);
         }
         if let Err(err) = self.settings.save() {
-            self.show_notice(format!("Couldn't save settings: {err:#}"), None, cx);
+            self.show(
+                Notice::error(
+                    "Couldn't save settings",
+                    "The change works for now, but Annuncia won't remember it next time.",
+                )
+                .detail(format!("{err:#}")),
+                cx,
+            );
         }
         if self.settings.update_channel != before.update_channel
             && let Some(updater) = &self.updater
@@ -1459,7 +1586,14 @@ impl Annuncia {
                     // falls back to the avatar or "Camera off".
                     Err(err) => {
                         self.camera_failed = true;
-                        self.set_notice(format!("{err:#}"), None);
+                        self.post(
+                            Notice::error(
+                                "Camera unavailable",
+                                "Check that no other app is using the camera, then turn it off \
+                                 and on again.",
+                            )
+                            .detail(format!("{err:#}")),
+                        );
                     }
                 }
             }
@@ -1482,9 +1616,15 @@ impl Annuncia {
             }
             Access::Denied => {
                 self.camera_failed = true;
-                self.set_notice(
-                    "Camera access is off for Annuncia",
-                    Some(("Open Settings".into(), Permission::Camera.settings_url())),
+                self.post(
+                    Notice::error(
+                        "Camera unavailable",
+                        "Camera access is off for Annuncia. Allow it in System Settings.",
+                    )
+                    .action(Some((
+                        "Open Settings".into(),
+                        Permission::Camera.settings_url(),
+                    ))),
                 );
             }
         }
