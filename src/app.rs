@@ -691,7 +691,7 @@ impl Annuncia {
                 state.phase = match result {
                     Ok(Some(path)) => Phase::Saved {
                         path,
-                        until: Instant::now() + Duration::from_secs(8),
+                        until: Instant::now() + Duration::from_secs(20),
                     },
                     Ok(None) => Phase::Idle,
                     Err(err) => {

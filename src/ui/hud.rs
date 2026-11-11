@@ -14,8 +14,8 @@ use crate::app::{self, Annuncia, End, Notice, Phase, Severity, TranscriptState};
 use crate::hotkeys::display_binding;
 use crate::models::Transcription;
 use crate::native::{self, MenuBarGeometry, OverlayLevel, TopLeftRect};
-use crate::ui::Theme;
 use crate::ui::icons::icon;
+use crate::ui::{Theme, tip};
 
 /// Each side of the notch: the timer on the left, pause and stop on the right.
 const WING: f64 = 84.;
@@ -44,6 +44,8 @@ pub struct Hud {
     confirm_restart_until: Option<Instant>,
     /// When the transcript was last copied, for a moment of "Copied" feedback.
     copied_at: Option<Instant>,
+    /// When the saved file was last copied, likewise.
+    file_copied_at: Option<Instant>,
 }
 
 pub fn format_elapsed(secs: u64) -> String {
@@ -73,6 +75,7 @@ pub fn open(state: Entity<Annuncia>, cx: &mut App) -> Option<WindowHandle<Hud>> 
                 hovered: false,
                 confirm_restart_until: None,
                 copied_at: None,
+                file_copied_at: None,
             }
         })
     })
@@ -473,6 +476,7 @@ impl Hud {
         let (reveal, copy, edit, play) = (path.clone(), path.clone(), path.clone(), path.clone());
         let transcript = self.transcript_button(path.clone(), cx);
         let state = self.state.clone();
+        let hud = cx.entity().downgrade();
         base.child(
             div()
                 .flex_1()
@@ -495,16 +499,33 @@ impl Hud {
                 .hover(|s| s.bg(white(0.2)))
                 .cursor_pointer()
                 .on_click(move |_, _, _| native::reveal_in_finder(&reveal))
+                // Only while hovered: the pointer leaving this window isn't reported, so a
+                // tooltip shown then would stay.
+                .when(self.hovered, |d| d.tooltip(tip("Show in Finder")))
                 .child(icon("folder", 12., white(0.85))),
         )
-        .child(drawer_button("copy", "Copy", false, move |_, _| {
-            native::copy_file_to_pasteboard(&copy)
-        }))
+        // Copy leads: stop, then paste the file wherever it's going.
+        .child(drawer_button(
+            "copy",
+            if just_copied(self.file_copied_at) {
+                "Copied"
+            } else {
+                "Copy"
+            },
+            true,
+            move |_, cx| {
+                native::copy_file_to_pasteboard(&copy);
+                let _ = hud.update(cx, |this, cx| {
+                    this.file_copied_at = Some(Instant::now());
+                    this.redraw_after_copied(cx);
+                });
+            },
+        ))
         .children(transcript)
         .child(drawer_button("edit", "Edit", false, move |_, cx| {
             state.update(cx, |s, cx| s.open_editor(edit.clone(), cx))
         }))
-        .child(drawer_button("play", "Open", true, move |_, _| {
+        .child(drawer_button("play", "Open", false, move |_, _| {
             native::open(&play)
         }))
     }
@@ -531,7 +552,19 @@ impl Hud {
                         .into_any_element(),
                 );
             }
-            TranscriptState::Failed(_) => return None,
+            TranscriptState::Failed(err) => {
+                return Some(
+                    div()
+                        .id("transcript-failed")
+                        .px(px(8.))
+                        .py(px(3.))
+                        .text_size(px(11.5))
+                        .text_color(white(0.55))
+                        .when(self.hovered, |d| d.tooltip(tip(err.clone())))
+                        .child("Transcript failed")
+                        .into_any_element(),
+                );
+            }
             TranscriptState::Ready(t) if t.is_empty() => {
                 return Some(
                     div()
@@ -544,10 +577,7 @@ impl Hud {
                 );
             }
             TranscriptState::Ready(_) => {
-                if self
-                    .copied_at
-                    .is_some_and(|t| t.elapsed() < Duration::from_millis(1500))
-                {
+                if just_copied(self.copied_at) {
                     "Copied"
                 } else {
                     "Copy transcript"
@@ -561,19 +591,24 @@ impl Hud {
                 if state.read(cx).copy_transcript(&path) {
                     let _ = hud.update(cx, |this, cx| {
                         this.copied_at = Some(Instant::now());
-                        cx.notify();
-                        cx.spawn(async move |this, cx| {
-                            cx.background_executor()
-                                .timer(Duration::from_millis(1550))
-                                .await;
-                            let _ = this.update(cx, |_, cx| cx.notify());
-                        })
-                        .detach();
+                        this.redraw_after_copied(cx);
                     });
                 }
             })
             .into_any_element(),
         )
+    }
+
+    /// Redraws now, and again once "Copied" has had its moment.
+    fn redraw_after_copied(&self, cx: &mut Context<Self>) {
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(1550))
+                .await;
+            let _ = this.update(cx, |_, cx| cx.notify());
+        })
+        .detach();
     }
 
     /// Restart throws the take away, so the first click arms it (the button turns red) and a
@@ -687,6 +722,11 @@ impl Hud {
             .on_click(move |_, _, cx| state.update(cx, |s, cx| on_click(s, cx)))
             .child(glyph)
     }
+}
+
+/// Whether a copy made at `at` still says "Copied".
+fn just_copied(at: Option<Instant>) -> bool {
+    at.is_some_and(|t| t.elapsed() < Duration::from_millis(1500))
 }
 
 /// How many lines the message and the error chain get. Text can't be measured before the window
