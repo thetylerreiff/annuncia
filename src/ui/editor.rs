@@ -360,6 +360,16 @@ impl Editor {
         cx.notify();
     }
 
+    /// ⌫ and the Delete button: cut the words selected in the transcript if there are any,
+    /// otherwise delete or restore the selected clip.
+    fn delete(&mut self, cx: &mut Context<Self>) {
+        if self.selected_words.is_some() {
+            self.cut_words(cx);
+        } else {
+            self.toggle_selected(cx);
+        }
+    }
+
     /// Cuts the words selected in the transcript from the timeline, like a cut made there.
     fn cut_words(&mut self, cx: &mut Context<Self>) {
         let Some((first, last)) = self.selected_words.take() else {
@@ -640,8 +650,7 @@ impl Editor {
         match keystroke.key.as_str() {
             "space" => self.toggle_play(cx),
             "s" => self.split(cx),
-            "backspace" | "delete" if self.selected_words.is_some() => self.cut_words(cx),
-            "backspace" | "delete" => self.toggle_selected(cx),
+            "backspace" | "delete" => self.delete(cx),
             // Trim the clip under the playhead to it.
             "c" => self.clean_up(cx),
             "i" | "o" => {
@@ -1274,14 +1283,16 @@ impl Editor {
                 icon_text(
                     "cut",
                     "trash",
-                    if selected_removed {
+                    if self.selected_words.is_some() {
+                        "Cut words"
+                    } else if selected_removed {
                         "Restore"
                     } else {
                         "Delete"
                     },
                     "⌫",
                 )
-                .on_click(cx.listener(|this, _, _, cx| this.toggle_selected(cx))),
+                .on_click(cx.listener(|this, _, _, cx| this.delete(cx))),
             )
             .child(
                 icon_text("cleanup", "wand", "Clean up", "C")
