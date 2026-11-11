@@ -6,9 +6,9 @@ use std::time::{Duration, Instant};
 
 use gpui::{
     AnyElement, App, AppContext as _, Context, Div, Entity, FocusHandle, Focusable, FontWeight,
-    InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Render, SharedString,
-    StatefulInteractiveElement as _, Styled as _, Window, WindowHandle, canvas, div, hsla,
-    prelude::FluentBuilder as _, px, relative,
+    Hsla, InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Render,
+    SharedString, StatefulInteractiveElement as _, Styled as _, Window, WindowHandle, canvas, div,
+    hsla, prelude::FluentBuilder as _, px, relative,
 };
 
 use crate::app::{self, Annuncia};
@@ -25,6 +25,8 @@ const TILE: f32 = 14.;
 const METER_FRAME: Duration = Duration::from_millis(40);
 /// A microphone that has delivered nothing for this long reads "No signal".
 const SILENCE: Duration = Duration::from_secs(3);
+/// How long the window list lights up when Record is asked for with no window picked.
+const FLASH: Duration = Duration::from_millis(700);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Picker {
@@ -41,6 +43,8 @@ pub struct Launcher {
     applied: Rc<Cell<f32>>,
     /// The microphone meter, while the microphone is being metered.
     meter: Option<Meter>,
+    /// The window list is lit up until then.
+    flash_until: Option<Instant>,
 }
 
 struct Meter {
@@ -134,7 +138,27 @@ impl Launcher {
             origin,
             applied: Rc::new(Cell::new(0.)),
             meter: None,
+            flash_until: None,
         }
+    }
+
+    /// Record was asked for in Window mode with no window picked: light up the list to pick
+    /// from.
+    pub fn ask_for_window(&mut self, cx: &mut Context<Self>) {
+        let until = Instant::now() + FLASH;
+        self.flash_until = Some(until);
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(FLASH).await;
+            let _ = this.update(cx, |this, cx| {
+                // A later ask keeps it lit for its own full time.
+                if this.flash_until == Some(until) {
+                    this.flash_until = None;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     /// Eases the meter toward the microphone's level the way the avatar's pulse does: quick to
@@ -196,10 +220,17 @@ impl Render for Launcher {
         let mode = settings.capture_mode;
         let handle = self.state.clone();
 
-        let window_subtitle = state
+        let picked = state
             .selected_window
-            .and_then(|id| state.windows.iter().find(|w| w.id == id))
-            .map_or("Pick a window".to_string(), |w| w.app.clone());
+            .and_then(|id| state.windows.iter().find(|w| w.id == id));
+        // In Window mode Record waits for a pick, so say so here, where the pick is made.
+        let (window_subtitle, window_subtitle_color) = match picked {
+            Some(w) => (w.app.clone(), theme.text_muted),
+            None if mode == CaptureMode::Window => {
+                ("Pick a window to record".to_string(), theme.record)
+            }
+            None => ("Pick a window".to_string(), theme.text_muted),
+        };
         let modes = div()
             .flex()
             .gap(px(8.))
@@ -208,6 +239,7 @@ impl Render for Launcher {
                 "display",
                 "Full screen",
                 "Main display".into(),
+                theme.text_muted,
                 mode,
                 theme,
             ))
@@ -216,10 +248,12 @@ impl Render for Launcher {
                 "window",
                 "Window",
                 window_subtitle,
+                window_subtitle_color,
                 mode,
                 theme,
             ));
-        let windows = (mode == CaptureMode::Window).then(|| self.window_list(state, theme));
+        let windows = (mode == CaptureMode::Window)
+            .then(|| self.window_list(state, self.flash_until.is_some(), theme));
 
         let camera_name = settings
             .camera_device
@@ -329,13 +363,14 @@ impl Render for Launcher {
             .text_color(white)
             .text_size(px(13.))
             .font_weight(FontWeight::SEMIBOLD)
-            .cursor_pointer()
-            .hover(|s| s.opacity(0.9))
-            .when(!can_start, |d| d.opacity(0.45))
-            .on_click({
+            // With no window picked it's inert; the Window tile says what's missing.
+            .when(can_start, |d| {
                 let handle = handle.clone();
-                move |_, _, cx| handle.update(cx, |s, cx| s.start_recording(cx))
+                d.cursor_pointer()
+                    .hover(|s| s.opacity(0.9))
+                    .on_click(move |_, _, cx| handle.update(cx, |s, cx| s.start_recording(cx)))
             })
+            .when(!can_start, |d| d.opacity(0.45))
             .child(div().size(px(10.)).rounded_full().bg(white))
             .child("Record")
             .child(keycap(
@@ -487,6 +522,7 @@ impl Launcher {
         icon_name: &'static str,
         title: &'static str,
         subtitle: String,
+        subtitle_color: Hsla,
         current: CaptureMode,
         theme: Theme,
     ) -> impl IntoElement {
@@ -518,14 +554,14 @@ impl Launcher {
                     .child(
                         div()
                             .text_size(px(11.5))
-                            .text_color(theme.text_muted)
+                            .text_color(subtitle_color)
                             .truncate()
                             .child(subtitle),
                     ),
             )
     }
 
-    fn window_list(&self, state: &Annuncia, theme: Theme) -> AnyElement {
+    fn window_list(&self, state: &Annuncia, flashing: bool, theme: Theme) -> AnyElement {
         let handle = self.state.clone();
         let list = div()
             .id("windows")
@@ -536,7 +572,8 @@ impl Launcher {
             .gap(px(2.))
             .p(px(4.))
             .rounded(px(TILE))
-            .bg(theme.tile);
+            .bg(theme.tile)
+            .when(flashing, |d| d.bg(theme.record.opacity(0.18)));
         if state.windows.is_empty() {
             let message = if state.windows_loading {
                 "Finding windows…"

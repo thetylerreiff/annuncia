@@ -395,11 +395,18 @@ impl Annuncia {
             CaptureMode::Window => match self.selected_window {
                 Some(window_id) => Target::Window { window_id },
                 None => {
-                    // Nothing picked yet: ask in the panel instead of guessing.
-                    self.show_notice("Pick a window to record", None, cx);
+                    // Nothing picked yet: ask in the panel instead of guessing, opening it if a
+                    // shortcut got us here. It opens on a deferred call, so ask after that.
                     if self.launcher.is_none() {
                         self.toggle_launcher(cx);
                     }
+                    let state = cx.entity();
+                    cx.defer(move |cx| {
+                        if let Some(handle) = state.read(cx).launcher {
+                            let _ =
+                                handle.update(cx, |launcher, _, cx| launcher.ask_for_window(cx));
+                        }
+                    });
                     return;
                 }
             },
