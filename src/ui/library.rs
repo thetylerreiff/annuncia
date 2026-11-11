@@ -532,6 +532,10 @@ impl LibraryView {
         native::focus_search_field(window, None);
         window.focus(&self.focus);
         let modifiers = event.modifiers();
+        if modifiers.control {
+            // Its mouse down opened the menu.
+            return;
+        }
         if modifiers.platform {
             self.select(index, Select::Toggle, cx);
         } else if modifiers.shift {
@@ -1337,6 +1341,15 @@ impl LibraryView {
                 MouseButton::Right,
                 cx.listener(move |this, event: &MouseDownEvent, _, cx| {
                     this.open_card_menu(index, event.position, cx)
+                }),
+            )
+            // ⌃-click is a right-click on the Mac.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    if event.modifiers.control {
+                        this.open_card_menu(index, event.position, cx)
+                    }
                 }),
             )
             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
