@@ -494,10 +494,16 @@ impl Editor {
         cx.notify();
     }
 
-    /// Whether closing can go ahead now. With an edit to lose, it can't: the toolbar asks
-    /// whether to discard it instead.
+    /// Whether the user has changed the timeline themself. Automatic clean up alone doesn't
+    /// count: closing after only looking shouldn't ask.
+    fn has_changes(&self) -> bool {
+        self.touched && self.edit.as_ref().is_some_and(Edit::is_edited)
+    }
+
+    /// Whether closing can go ahead now. With changes to lose, it can't: the toolbar asks
+    /// whether to discard them instead.
     fn request_close(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.edit.as_ref().is_some_and(Edit::is_edited) {
+        if self.has_changes() {
             self.confirm_discard = true;
             cx.notify();
             return false;
