@@ -516,7 +516,7 @@ impl Editor {
     /// Whether closing can go ahead now. Never while saving, which must finish to hand the
     /// result to the app. With changes to lose, it can't either: the toolbar asks whether to
     /// discard them instead.
-    fn request_close(&mut self, cx: &mut Context<Self>) -> bool {
+    pub fn request_close(&mut self, cx: &mut Context<Self>) -> bool {
         if self.saving.is_some() {
             return false;
         }
