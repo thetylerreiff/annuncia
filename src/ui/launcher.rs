@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 use gpui::{
     AnyElement, App, AppContext as _, Context, Div, Entity, FocusHandle, Focusable, FontWeight,
     Hsla, InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Render,
-    SharedString, StatefulInteractiveElement as _, Styled as _, Window, WindowHandle, canvas, div,
-    hsla, img, prelude::FluentBuilder as _, px, relative,
+    ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled as _, Window, WindowHandle,
+    canvas, div, hsla, img, prelude::FluentBuilder as _, px, relative,
 };
 
 use crate::app::{self, Annuncia};
@@ -45,6 +45,10 @@ pub struct Launcher {
     meter: Option<Meter>,
     /// The window list is lit up until then.
     flash_until: Option<Instant>,
+    window_scroll: ScrollHandle,
+    /// The window list has been stepped through with the arrow keys, so the picked row shows
+    /// focus.
+    keyed: bool,
 }
 
 struct Meter {
@@ -139,6 +143,8 @@ impl Launcher {
             applied: Rc::new(Cell::new(0.)),
             meter: None,
             flash_until: None,
+            window_scroll: ScrollHandle::new(),
+            keyed: false,
         }
     }
 
@@ -196,11 +202,50 @@ impl Launcher {
     }
 
     fn on_key(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
-        match event.keystroke.key.as_str() {
+        let keystroke = &event.keystroke;
+        if keystroke.modifiers.platform {
+            let mode = match keystroke.key.as_str() {
+                "1" => CaptureMode::Screen,
+                "2" => CaptureMode::Window,
+                _ => return,
+            };
+            self.state
+                .update(cx, |s, cx| s.update_settings(cx, |s| s.capture_mode = mode));
+            return;
+        }
+        match keystroke.key.as_str() {
             "escape" => self.state.update(cx, |s, cx| s.close_launcher(cx)),
             "enter" => self.state.update(cx, |s, cx| s.start_recording(cx)),
+            "up" => self.step_window(false, cx),
+            "down" => self.step_window(true, cx),
             _ => {}
         }
+    }
+
+    /// ↑/↓ pick the previous or next window in the list, while it's showing.
+    fn step_window(&mut self, down: bool, cx: &mut Context<Self>) {
+        let state = self.state.read(cx);
+        if state.settings.capture_mode != CaptureMode::Window || state.windows.is_empty() {
+            return;
+        }
+        let last = state.windows.len() - 1;
+        let current = state
+            .selected_window
+            .and_then(|id| state.windows.iter().position(|w| w.id == id));
+        let next = match current {
+            None if down => 0,
+            None => last,
+            Some(i) if down => (i + 1).min(last),
+            Some(i) => i.saturating_sub(1),
+        };
+        let id = state.windows[next].id;
+        self.keyed = true;
+        self.window_scroll.scroll_to_item(next);
+        self.state.update(cx, |s, cx| {
+            s.selected_window = Some(id);
+            cx.notify();
+        });
+        cx.notify();
     }
 }
 
@@ -581,6 +626,7 @@ impl Launcher {
             .p(px(4.))
             .rounded(px(TILE))
             .bg(theme.tile)
+            .track_scroll(&self.window_scroll)
             .when(flashing, |d| d.bg(theme.record.opacity(0.18)));
         if state.windows.is_empty() {
             let message = if state.windows_loading {
@@ -603,11 +649,18 @@ impl Launcher {
             let selected = state.selected_window == Some(w.id);
             let id = w.id;
             let handle = handle.clone();
+            // The border is always there (clear) so showing focus doesn't shift the row.
             div()
                 .id(SharedString::from(format!("window-{id}")))
-                .px(px(8.))
-                .py(px(6.))
+                .px(px(7.))
+                .py(px(5.))
                 .rounded(px(10.))
+                .border_1()
+                .border_color(if selected && self.keyed {
+                    theme.accent_soft
+                } else {
+                    hsla(0., 0., 0., 0.)
+                })
                 .cursor_pointer()
                 .when(selected, |d| d.bg(theme.accent.opacity(0.22)))
                 .when(!selected, |d| d.hover(|s| s.bg(theme.tile_hover)))
