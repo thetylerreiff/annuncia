@@ -592,11 +592,12 @@ impl Editor {
             })?;
             let out = if copy {
                 // Beside the original, numbered when the name is taken.
-                let mut out = path.with_file_name(format!("{stem} (edited).mp4"));
+                let base = unedited_stem(&stem);
+                let mut out = path.with_file_name(format!("{base} (edited).mp4"));
                 let mut n = 1;
                 while out.exists() {
                     n += 1;
-                    out = path.with_file_name(format!("{stem} (edited {n}).mp4"));
+                    out = path.with_file_name(format!("{base} (edited {n}).mp4"));
                 }
                 out
             } else {
@@ -1606,6 +1607,23 @@ fn tool_button(
         .child(icon(name, 14., theme.text))
         .child(label)
         .child(keycap(key, theme.text_muted))
+}
+
+/// `stem` without the ` (edited)` or ` (edited N)` an earlier Save as copy gave it, so a copy of
+/// a copy isn't named "X (edited) (edited)".
+fn unedited_stem(stem: &str) -> &str {
+    let Some((base, tag)) = stem
+        .strip_suffix(')')
+        .and_then(|rest| rest.rsplit_once(" (edited"))
+    else {
+        return stem;
+    };
+    let numbered = |n: &str| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit());
+    if tag.is_empty() || tag.strip_prefix(' ').is_some_and(numbered) {
+        base
+    } else {
+        stem
+    }
 }
 
 /// The loudest of `peaks` (`PEAKS_PER_SECOND` apart) under each of `BARS` bars across `view`.
