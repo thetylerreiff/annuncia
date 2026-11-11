@@ -10,13 +10,13 @@ use std::time::Duration;
 
 use chrono::{DateTime, Local, NaiveDateTime, TimeZone as _};
 use gpui::{
-    AnyElement, App, AppContext as _, Bounds, Context, Entity, FocusHandle, Focusable, FontWeight,
-    HighlightStyle, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton,
-    MouseDownEvent, MouseMoveEvent, ObjectFit, ParentElement as _, Pixels, Render, ScrollHandle,
-    SharedString, StatefulInteractiveElement as _, Styled as _, StyledImage as _, StyledText,
-    Subscription, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds, WindowHandle,
-    WindowOptions, canvas, div, hsla, img, prelude::FluentBuilder as _, px, relative, size,
-    surface,
+    AnyElement, App, AppContext as _, Bounds, ClickEvent, Context, Entity, FocusHandle, Focusable,
+    FontWeight, HighlightStyle, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton,
+    MouseDownEvent, MouseMoveEvent, ObjectFit, ParentElement as _, Pixels, Point, Render,
+    ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled as _, StyledImage as _,
+    StyledText, Subscription, TitlebarOptions, Window, WindowBackgroundAppearance, WindowBounds,
+    WindowHandle, WindowOptions, anchored, canvas, deferred, div, hsla, img,
+    prelude::FluentBuilder as _, px, relative, size, surface,
 };
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
@@ -57,6 +57,48 @@ pub struct LibraryView {
     query: String,
     /// Settings, while the window shows it instead of the recordings.
     settings: Option<(Entity<SettingsView>, Subscription)>,
+    /// The right-click (or "⋯") menu, while it's open.
+    menu: Option<Menu>,
+    /// Why the last rename or Trash from the grid didn't happen.
+    error: Option<SharedString>,
+}
+
+/// A small popover of actions on one or more recordings.
+struct Menu {
+    paths: Vec<PathBuf>,
+    /// Where its top-left corner goes, in window coordinates.
+    at: Point<Pixels>,
+    /// `None` draws a separator.
+    actions: Vec<Option<Action>>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Action {
+    Open,
+    Edit,
+    CopyFile,
+    CopyTranscript,
+    Transcribe,
+    TranscribeAgain,
+    Reveal,
+    Rename,
+    Trash,
+}
+
+impl Action {
+    fn label(self) -> &'static str {
+        match self {
+            Action::Open => "Open",
+            Action::Edit => "Edit",
+            Action::CopyFile => "Copy file",
+            Action::CopyTranscript => "Copy transcript",
+            Action::Transcribe => "Transcribe",
+            Action::TranscribeAgain => "Transcribe again",
+            Action::Reveal => "Show in Finder",
+            Action::Rename => "Rename…",
+            Action::Trash => "Move to Trash",
+        }
+    }
 }
 
 struct Detail {
@@ -149,6 +191,8 @@ pub fn open(
                 search: None,
                 query: String::new(),
                 settings: None,
+                menu: None,
+                error: None,
             }
         })
     })
@@ -244,6 +288,10 @@ impl LibraryView {
         }
         // Settings handles its own keys.
         if self.settings.is_some() {
+            return;
+        }
+        if self.menu.is_some() && ks.key == "escape" {
+            self.close_menu(cx);
             return;
         }
         if ks.modifiers.platform && ks.key == "f" && self.detail.is_none() {
@@ -450,11 +498,7 @@ impl LibraryView {
         }
     }
 
-    fn rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(detail) = &self.detail else {
-            return;
-        };
-        let path = detail.path.clone();
+    fn rename(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         let current = path
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
@@ -468,14 +512,15 @@ impl LibraryView {
                 let result = this
                     .state
                     .update(cx, |s, cx| s.rename_recording(&path, &name, cx));
-                if let Some(detail) = this.detail.as_mut().filter(|d| d.path == path) {
-                    match result {
-                        Ok(to) => {
+                match result {
+                    Ok(to) => {
+                        this.error = None;
+                        if let Some(detail) = this.detail.as_mut().filter(|d| d.path == path) {
                             detail.path = to;
                             detail.error = None;
                         }
-                        Err(err) => detail.error = Some(err),
                     }
+                    Err(err) => this.report(err),
                 }
                 cx.notify();
             });
@@ -483,28 +528,116 @@ impl LibraryView {
         .detach();
     }
 
-    fn trash(&mut self, cx: &mut Context<Self>) {
-        let Some(path) = self.detail.as_ref().map(|d| d.path.clone()) else {
-            return;
-        };
-        match self.state.update(cx, |s, cx| s.trash_recording(&path, cx)) {
-            Ok(()) => self.close_detail(cx),
-            Err(err) => {
-                if let Some(detail) = &mut self.detail {
-                    detail.error = Some(err);
+    fn trash(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        for path in &paths {
+            match self.state.update(cx, |s, cx| s.trash_recording(path, cx)) {
+                Ok(()) => {
+                    if self.detail.as_ref().is_some_and(|d| &d.path == path) {
+                        self.close_detail(cx);
+                    }
                 }
-                cx.notify();
+                Err(err) => self.report(err),
             }
+        }
+        cx.notify();
+    }
+
+    /// Shows why an action didn't happen: in the detail header if a recording is open, else
+    /// in the grid's.
+    fn report(&mut self, err: SharedString) {
+        match &mut self.detail {
+            Some(detail) => detail.error = Some(err),
+            None => self.error = Some(err),
         }
     }
 
-    fn edit(&mut self, cx: &mut Context<Self>) {
-        let Some(detail) = &self.detail else {
+    fn edit(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        if let Some(detail) = &self.detail {
+            detail.player.pause();
+        }
+        self.state.update(cx, |s, cx| s.open_editor(path, cx));
+    }
+
+    /// Whether `path` has a transcript with words in it, cached or made this session.
+    fn has_transcript(&self, path: &Path, cx: &App) -> bool {
+        self.items
+            .iter()
+            .find(|i| i.entry.path == path)
+            .and_then(|i| i.transcript.as_ref())
+            .is_some_and(|t| !t.is_empty())
+            || matches!(
+                self.state.read(cx).transcripts.get(path),
+                Some(TranscriptState::Ready(t)) if !t.is_empty()
+            )
+    }
+
+    /// Everything a card can do, the same as the detail view can.
+    fn card_actions(&self, path: &Path, cx: &App) -> Vec<Option<Action>> {
+        let transcript = self.has_transcript(path, cx);
+        let state = self.state.read(cx);
+        let mut actions = vec![Some(Action::Open), Some(Action::Edit), None];
+        actions.push(Some(Action::CopyFile));
+        if transcript {
+            actions.push(Some(Action::CopyTranscript));
+        }
+        let working = matches!(state.transcripts.get(path), Some(TranscriptState::Working));
+        if state.manual_model().is_some() && !working {
+            actions.push(Some(if transcript {
+                Action::TranscribeAgain
+            } else {
+                Action::Transcribe
+            }));
+        }
+        actions.extend([
+            None,
+            Some(Action::Reveal),
+            Some(Action::Rename),
+            None,
+            Some(Action::Trash),
+        ]);
+        actions
+    }
+
+    fn open_card_menu(&mut self, path: PathBuf, at: Point<Pixels>, cx: &mut Context<Self>) {
+        let actions = self.card_actions(&path, cx);
+        self.menu = Some(Menu {
+            paths: vec![path],
+            at,
+            actions,
+        });
+        cx.notify();
+    }
+
+    fn close_menu(&mut self, cx: &mut Context<Self>) {
+        if self.menu.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    fn perform(&mut self, action: Action, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(menu) = self.menu.take() else {
             return;
         };
-        detail.player.pause();
-        let path = detail.path.clone();
-        self.state.update(cx, |s, cx| s.open_editor(path, cx));
+        self.error = None;
+        let Some(path) = menu.paths.first().cloned() else {
+            return;
+        };
+        match action {
+            Action::Open => self.open_detail(path, 0., window, cx),
+            Action::Edit => self.edit(path, cx),
+            Action::CopyFile => native::copy_file_to_pasteboard(&path),
+            Action::CopyTranscript => self.copy_transcript(&path, cx),
+            Action::Transcribe => self.state.update(cx, |s, cx| s.transcribe_now(path, cx)),
+            // Forget the transcript first, or transcribing keeps the one it has.
+            Action::TranscribeAgain => self.state.update(cx, |s, cx| {
+                s.transcripts.remove(&path);
+                s.transcribe_now(path, cx);
+            }),
+            Action::Reveal => native::reveal_in_finder(&path),
+            Action::Rename => self.rename(path, window, cx),
+            Action::Trash => self.trash(menu.paths, cx),
+        }
+        cx.notify();
     }
 
     fn copy_transcript(&mut self, path: &Path, cx: &mut Context<Self>) {
@@ -545,11 +678,7 @@ impl LibraryView {
             Some(name) => (name, Some(time)),
             None => (time, None),
         };
-        let transcript = item.transcript.as_ref().is_some_and(|t| !t.is_empty())
-            || matches!(
-                self.state.read(cx).transcripts.get(&path),
-                Some(TranscriptState::Ready(t)) if !t.is_empty()
-            );
+        let transcript = self.has_transcript(&path, cx);
         let copied = self.copied.as_ref() == Some(&path);
         // Mac screens are close to 16:10.
         let height = width * 10. / 16.;
@@ -632,6 +761,15 @@ impl LibraryView {
                                 cx.stop_propagation();
                                 native::reveal_in_finder(&path);
                             })
+                    })
+                    .child({
+                        let path = path.clone();
+                        more_button(("more", index), theme).on_click(cx.listener(
+                            move |this, event: &ClickEvent, _, cx| {
+                                cx.stop_propagation();
+                                this.open_card_menu(path.clone(), event.position(), cx);
+                            },
+                        ))
                     }),
             );
 
@@ -643,6 +781,15 @@ impl LibraryView {
             .flex_col()
             .gap(px(8.))
             .cursor_pointer()
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener({
+                    let path = path.clone();
+                    move |this, event: &MouseDownEvent, _, cx| {
+                        this.open_card_menu(path.clone(), event.position, cx)
+                    }
+                }),
+            )
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.open_detail(path.clone(), 0., window, cx)
             }))
@@ -745,22 +892,21 @@ impl LibraryView {
                     .flex()
                     .flex_none()
                     .gap(px(6.))
-                    .child(
-                        header_button("edit", "Edit")
-                            .on_click(cx.listener(|this, _, _, cx| this.edit(cx))),
-                    )
+                    .child(header_button("edit", "Edit").on_click(cx.listener({
+                        let path = path.clone();
+                        move |this, _, _, cx| this.edit(path.clone(), cx)
+                    })))
                     .child(header_button("reveal", "Show in Finder").on_click({
                         let path = path.clone();
                         move |_, _, _| native::reveal_in_finder(&path)
                     }))
-                    .child(
-                        header_button("rename", "Rename…")
-                            .on_click(cx.listener(|this, _, window, cx| this.rename(window, cx))),
-                    )
-                    .child(
-                        header_button("trash", "Move to Trash")
-                            .on_click(cx.listener(|this, _, _, cx| this.trash(cx))),
-                    ),
+                    .child(header_button("rename", "Rename…").on_click(cx.listener({
+                        let path = path.clone();
+                        move |this, _, window, cx| this.rename(path.clone(), window, cx)
+                    })))
+                    .child(header_button("trash", "Move to Trash").on_click(
+                        cx.listener(move |this, _, _, cx| this.trash(vec![path.clone()], cx)),
+                    )),
             )
             .into_any_element()
     }
@@ -1021,6 +1167,68 @@ impl LibraryView {
 }
 
 impl LibraryView {
+    /// The open menu, drawn over everything at the point it was opened from.
+    fn menu_popover(&self, theme: Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let menu = self.menu.as_ref()?;
+        let rows = menu
+            .actions
+            .iter()
+            .enumerate()
+            .map(|(i, action)| match *action {
+                None => div()
+                    .h(px(1.))
+                    .mx(px(8.))
+                    .my(px(4.))
+                    .bg(theme.hairline)
+                    .into_any_element(),
+                Some(action) => div()
+                    .id(("menu-item", i))
+                    .px(px(10.))
+                    .py(px(4.))
+                    .rounded(px(6.))
+                    .cursor_pointer()
+                    .whitespace_nowrap()
+                    .text_size(px(13.))
+                    .text_color(theme.text)
+                    .hover(|s| s.bg(theme.control_hover))
+                    .on_click(
+                        cx.listener(move |this, _, window, cx| this.perform(action, window, cx)),
+                    )
+                    .child(action.label())
+                    .into_any_element(),
+            })
+            .collect::<Vec<_>>();
+        Some(
+            deferred(
+                anchored()
+                    .position(menu.at)
+                    .snap_to_window_with_margin(px(8.))
+                    .child(
+                        div()
+                            .id("menu")
+                            .occlude()
+                            .min_w(px(180.))
+                            .p(px(5.))
+                            .flex()
+                            .flex_col()
+                            .rounded(px(10.))
+                            .bg(theme.surface)
+                            .border_1()
+                            .border_color(theme.hairline)
+                            .shadow_lg()
+                            // Its own mouse downs mustn't start a window drag under it.
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_menu(cx)))
+                            .children(rows),
+                    ),
+            )
+            .with_priority(1)
+            .into_any_element(),
+        )
+    }
+}
+
+impl LibraryView {
     /// Recordings whose transcript or name matches the query, each with its matches; clicking
     /// one plays the recording from there.
     fn results(&self, theme: Theme, cx: &mut Context<Self>) -> AnyElement {
@@ -1224,10 +1432,12 @@ impl Render for LibraryView {
         if let Some((settings, _)) = &self.settings {
             return root.child(settings.clone());
         }
+        let menu = self.menu_popover(theme, cx);
         if self.detail.is_some() {
             return root
                 .child(self.detail_header(theme, cx))
-                .child(self.detail_body(theme, cx));
+                .child(self.detail_body(theme, cx))
+                .children(menu);
         }
         let available = f32::from(window.viewport_size().width) - PADDING * 2.;
         let columns = ((available + GAP) / (MIN_CARD + GAP)).floor().max(1.) as usize;
@@ -1264,6 +1474,17 @@ impl Render for LibraryView {
                             1 => "1 recording".to_string(),
                             n => format!("{n} recordings"),
                         }),
+                )
+            })
+            .when_some(self.error.clone(), |d, error| {
+                d.child(
+                    div()
+                        .flex_shrink()
+                        .min_w_0()
+                        .text_size(px(12.))
+                        .text_color(theme.record)
+                        .truncate()
+                        .child(error),
                 )
             })
             // Room for the native search field, then the cog.
@@ -1380,7 +1601,7 @@ impl Render for LibraryView {
                 .into_any_element()
         };
 
-        root.child(header).child(body)
+        root.child(header).child(body).children(menu)
     }
 }
 
@@ -1430,6 +1651,24 @@ fn overlay_button(
         .whitespace_nowrap()
         .child(icon(icon_name, 12., theme.text))
         .child(label)
+}
+
+/// The "⋯" overlay button that opens a card's menu.
+fn more_button(id: impl Into<gpui::ElementId>, theme: Theme) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .h(px(26.))
+        .w(px(30.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(7.))
+        .bg(hsla(0., 0., 0., 0.72))
+        .hover(|s| s.bg(hsla(0., 0., 0.12, 0.9)))
+        .text_size(px(13.))
+        .font_weight(FontWeight::BOLD)
+        .text_color(theme.text)
+        .child("⋯")
 }
 
 fn local_time(created: i64) -> Option<DateTime<Local>> {
