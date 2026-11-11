@@ -381,7 +381,11 @@ function update() {
   notch.classList.toggle('wings-open', nw > .98);
   notch.classList.toggle('hand-off', handOff);
   document.body.classList.toggle('rec-on', nd > .2 && !past);
-  document.body.classList.toggle('in-body', p > .5 || r.bottom < 0);
+  // While the stop scene is pinned its panel fills the top edge, so the nav steps out of the way;
+  // otherwise it gets its backing as page content nears it.
+  const stopOn = sr.top <= 0 && sr.bottom > 160;
+  document.body.classList.toggle('stop-on', stopOn);
+  document.body.classList.toggle('nav-solid', r.bottom < 160 && !stopOn);
 
   // The notch comes down
   drop.classList.toggle('on', pinned || stopStatic);

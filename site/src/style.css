@@ -72,16 +72,21 @@ img, canvas, svg { display: block; }
   font-size: 15px; font-weight: 500;
   transition: opacity .3s, transform .4s var(--ease);
 }
+/* Once the art has gone into the notch, page content scrolls under the nav: give it black glass to
+   sit on, with a hairline at its foot. The notch hangs from the top centre of the same band. */
 .nav::before {
-  content: ""; position: absolute; inset: 0 0 -24px 0; z-index: -1; pointer-events: none;
-  background: linear-gradient(180deg, rgba(0, 0, 0, .78), rgba(0, 0, 0, 0));
+  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  background: rgba(4, 4, 10, .8);
+  backdrop-filter: blur(16px) saturate(1.2); -webkit-backdrop-filter: blur(16px) saturate(1.2);
+  box-shadow: 0 1px 0 var(--line);
   opacity: 0; transition: opacity .4s;
 }
-body.in-body .nav::before { opacity: 1; }
+body.nav-solid .nav::before { opacity: 1; }
+body.stop-on .nav { opacity: 0; transform: translateY(-100%); visibility: hidden; pointer-events: none; transition: opacity .3s, transform .4s var(--ease), visibility 0s .4s; }
 .brand { display: inline-flex; align-items: center; gap: 10px; font-weight: 600; letter-spacing: -.02em; font-size: 17px; }
 .brand img { border-radius: 6px; }
 .nav nav { display: flex; align-items: center; gap: 26px; padding: 4px 4px 4px 18px; border-radius: 12px; background: rgba(13, 13, 36, .5); backdrop-filter: blur(12px) saturate(1.2); -webkit-backdrop-filter: blur(12px) saturate(1.2); box-shadow: inset 0 0 0 1px rgba(212, 212, 242, .08); }
-body.in-body .nav nav { background: rgba(0, 0, 0, .55); }
+body.nav-solid .nav nav { padding: 0; background: none; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
 .nl { color: rgba(242, 242, 245, .86); transition: color .2s, opacity .3s; text-shadow: 0 0 14px rgba(13, 13, 36, .9), 0 0 3px rgba(13, 13, 36, .9); }
 .nl:hover { color: #fff; }
 .nav-dl { height: 36px; padding: 0 14px; border-radius: 8px; display: inline-flex; align-items: center; box-shadow: inset 0 0 0 1px rgba(212, 212, 242, .3); }
@@ -710,6 +715,7 @@ h3 + .body { margin-top: 12px; }
   html { scroll-behavior: auto; }
   .reveal { opacity: 1; transform: none; transition: none; }
   .notch .rdot, .an-notch .rdot { animation: none; }
+  .nav, .nav::before { transition: none; }
   .seg-el, .wing, .bubble, .dw-chart i { transition: none; }
   .chip { animation: none; }
   .kw { transition: none; }
