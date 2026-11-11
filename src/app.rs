@@ -155,6 +155,13 @@ impl Notice {
         self.action = action;
         self
     }
+
+    /// Lets an error go away like an info notice does: for problems raised just by opening the
+    /// panel, which would otherwise stay pinned on a Mac that will always have them.
+    pub fn timed(mut self) -> Self {
+        self.until = Some(Instant::now() + Duration::from_secs(10));
+        self
+    }
 }
 
 pub struct Annuncia {
@@ -900,9 +907,14 @@ impl Annuncia {
                         }
                         state.windows = windows;
                     }
-                    Err(err) => state.show_notice(
-                        format!("{err:#}"),
-                        Some(("Open Settings".into(), Permission::Screen.settings_url())),
+                    // The error is the permission hint, already a sentence.
+                    Err(err) => state.show(
+                        Notice::error("Couldn't list windows", err.to_string())
+                            .action(Some((
+                                "Open Settings".into(),
+                                Permission::Screen.settings_url(),
+                            )))
+                            .timed(),
                         cx,
                     ),
                 }
