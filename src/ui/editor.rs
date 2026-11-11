@@ -567,14 +567,36 @@ impl Editor {
                 self.record(before);
                 cx.notify();
             }
-            "left" | "right" => {
+            // J steps back like ←.
+            "left" | "right" | "j" => {
                 let Some(duration) = self.edit.as_ref().map(|e| e.duration) else {
                     return;
                 };
-                let delta = if keystroke.key == "left" { -step } else { step };
+                let delta = if keystroke.key == "right" {
+                    step
+                } else {
+                    -step
+                };
                 self.seek((self.playhead + delta).clamp(0., duration), true);
                 cx.notify();
             }
+            // A frame back or forward, at the frame rate recordings are made at.
+            "," | "." => {
+                let Some(duration) = self.edit.as_ref().map(|e| e.duration) else {
+                    return;
+                };
+                let fps = f64::from(self.state.read(cx).settings.fps.max(1));
+                let delta = if keystroke.key == "," { -1. } else { 1. };
+                let frame = (self.playhead * fps).round() + delta;
+                self.player.pause();
+                self.seek((frame / fps).clamp(0., duration), true);
+                cx.notify();
+            }
+            "k" => {
+                self.player.pause();
+                cx.notify();
+            }
+            "l" if !self.player.is_playing() => self.toggle_play(cx),
             // A second Esc keeps editing.
             "escape" if self.confirm_discard => {
                 self.confirm_discard = false;
