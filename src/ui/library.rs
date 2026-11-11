@@ -52,6 +52,7 @@ const VOLUME_WIDTH: f32 = 64.;
 #[derive(Clone, Copy)]
 struct Playback {
     speed: f32,
+    /// Never zero: at zero it's `muted`, and this is the volume to come back to.
     volume: f32,
     muted: bool,
 }
@@ -894,7 +895,8 @@ impl LibraryView {
         cx.notify();
     }
 
-    /// Sets the volume from a point on its slider; turning it up unmutes.
+    /// Sets the volume from a point on its slider; turning it up unmutes. Dragging it to zero
+    /// mutes instead, keeping the last audible volume for Unmute to bring back.
     fn set_volume_at(&mut self, x: Pixels, cx: &mut Context<Self>) {
         let Some(detail) = &self.detail else {
             return;
@@ -904,10 +906,12 @@ impl LibraryView {
         };
         let volume = (f32::from(x - bounds.origin.x) / f32::from(bounds.size.width)).clamp(0., 1.);
         let mut playback = PLAYBACK.get();
-        playback.volume = volume;
         playback.muted = volume == 0.;
+        if !playback.muted {
+            playback.volume = volume;
+        }
         PLAYBACK.set(playback);
-        detail.player.set_volume(volume);
+        detail.player.set_volume(playback.volume);
         detail.player.set_muted(playback.muted);
         cx.notify();
     }
