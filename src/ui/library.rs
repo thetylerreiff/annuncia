@@ -52,6 +52,7 @@ const VOLUME_WIDTH: f32 = 64.;
 #[derive(Clone, Copy)]
 struct Playback {
     speed: f32,
+    /// Never zero: at zero it's `muted`, and this is the volume to come back to.
     volume: f32,
     muted: bool,
 }
@@ -365,12 +366,24 @@ impl LibraryView {
         if self.settings.is_some() {
             return;
         }
-        if ks.modifiers.platform && ks.key == "z" && self.undo.is_some() {
-            self.undo_trash(cx);
-            return;
-        }
-        if self.menu.is_some() && ks.key == "escape" {
+        // Any key closes the menu, so it can't act on a selection the key changed. Esc does
+        // nothing more.
+        if self.menu.is_some() {
             self.close_menu(cx);
+            if ks.key == "escape" {
+                return;
+            }
+        }
+        // ⌘-keys reach us even while the search field is being edited; there they're its own
+        // (⌘A, ⌘Z, ⌘⌫), not the grid's.
+        let editing = self.search_editing();
+        if ks.modifiers.platform
+            && !ks.modifiers.shift
+            && ks.key == "z"
+            && self.undo.is_some()
+            && !editing
+        {
+            self.undo_trash(cx);
             return;
         }
         if ks.modifiers.platform && ks.key == "f" {
@@ -382,6 +395,9 @@ impl LibraryView {
                 field.setHidden(false);
             }
             native::focus_search_field(window, self.search.as_deref());
+            return;
+        }
+        if editing {
             return;
         }
         // The grid's keys, while it shows (not search results).
@@ -409,6 +425,13 @@ impl LibraryView {
             "l" => self.play_forwards(cx),
             _ => {}
         }
+    }
+
+    /// Whether the native search field has the keyboard.
+    fn search_editing(&self) -> bool {
+        self.search
+            .as_ref()
+            .is_some_and(|field| field.currentEditor().is_some())
     }
 
     fn on_grid_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -509,6 +532,10 @@ impl LibraryView {
         native::focus_search_field(window, None);
         window.focus(&self.focus);
         let modifiers = event.modifiers();
+        if modifiers.control {
+            // Its mouse down opened the menu.
+            return;
+        }
         if modifiers.platform {
             self.select(index, Select::Toggle, cx);
         } else if modifiers.shift {
@@ -594,9 +621,12 @@ impl LibraryView {
         }
     }
 
-    /// Moves the selected recordings to the Trash and selects the one after them.
     fn trash_selection(&mut self, cx: &mut Context<Self>) {
-        let paths = self.selected_paths();
+        self.trash_and_select_next(self.selected_paths(), cx);
+    }
+
+    /// Moves `paths` to the Trash and selects the recording after them.
+    fn trash_and_select_next(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
         if paths.is_empty() {
             return;
         }
@@ -634,6 +664,7 @@ impl LibraryView {
         if let Some(detail) = &self.detail {
             detail.player.pause();
         }
+        self.menu = None;
         native::focus_search_field(window, None);
         let view = match &self.settings {
             Some((view, _)) => view.clone(),
@@ -677,6 +708,7 @@ impl LibraryView {
         let Some(mtm) = MainThreadMarker::new() else {
             return;
         };
+        self.menu = None;
         // Keys go to the player, not the search field it hides.
         native::focus_search_field(window, None);
         window.focus(&self.focus);
@@ -720,6 +752,11 @@ impl LibraryView {
             let hidden = self.detail.is_some() || self.settings.is_some();
             if field.isHidden() != hidden {
                 field.setHidden(hidden);
+            }
+            // Clicking into the field takes the keys; the menu goes with them.
+            if self.menu.is_some() && field.currentEditor().is_some() {
+                self.menu = None;
+                cx.notify();
             }
             let query = field.stringValue().to_string();
             if query != self.query {
@@ -862,7 +899,8 @@ impl LibraryView {
         cx.notify();
     }
 
-    /// Sets the volume from a point on its slider; turning it up unmutes.
+    /// Sets the volume from a point on its slider; turning it up unmutes. Dragging it to zero
+    /// mutes instead, keeping the last audible volume for Unmute to bring back.
     fn set_volume_at(&mut self, x: Pixels, cx: &mut Context<Self>) {
         let Some(detail) = &self.detail else {
             return;
@@ -872,10 +910,12 @@ impl LibraryView {
         };
         let volume = (f32::from(x - bounds.origin.x) / f32::from(bounds.size.width)).clamp(0., 1.);
         let mut playback = PLAYBACK.get();
-        playback.volume = volume;
         playback.muted = volume == 0.;
+        if !playback.muted {
+            playback.volume = volume;
+        }
         PLAYBACK.set(playback);
-        detail.player.set_volume(volume);
+        detail.player.set_volume(playback.volume);
         detail.player.set_muted(playback.muted);
         cx.notify();
     }
@@ -947,6 +987,16 @@ impl LibraryView {
                 match result {
                     Ok(to) => {
                         this.error = None;
+                        // The selection follows the file to its new name.
+                        for p in this
+                            .selection
+                            .iter_mut()
+                            .chain(this.anchor.as_mut())
+                            .chain(this.cursor.as_mut())
+                            .filter(|p| **p == path)
+                        {
+                            *p = to.clone();
+                        }
                         if let Some(detail) = this.detail.as_mut().filter(|d| d.path == path) {
                             detail.path = to;
                             detail.error = None;
@@ -973,7 +1023,8 @@ impl LibraryView {
                     if self.detail.as_ref().is_some_and(|d| &d.path == path) {
                         self.close_detail(cx);
                     }
-                    trashed.extend(entry.map(|e| (e, to)));
+                    // Undo can only put back what it can find in the Trash.
+                    trashed.extend(entry.zip(to));
                 }
                 Err(err) => self.report(err),
             }
@@ -1089,10 +1140,19 @@ impl LibraryView {
 
     /// The menu for the card at `index`: for the whole selection when the card is part of it,
     /// else for that card alone, which becomes the selection, as in Finder.
-    fn open_card_menu(&mut self, index: usize, at: Point<Pixels>, cx: &mut Context<Self>) {
+    fn open_card_menu(
+        &mut self,
+        index: usize,
+        at: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(path) = self.items.get(index).map(|i| i.entry.path.clone()) else {
             return;
         };
+        // Its keys (Esc, ⌫) go to the grid, not the search field.
+        native::focus_search_field(window, None);
+        window.focus(&self.focus);
         if !self.selection.contains(&path) {
             self.select(index, Select::Only, cx);
         }
@@ -1103,6 +1163,19 @@ impl LibraryView {
         };
         self.menu = Some(Menu { paths, at, actions });
         cx.notify();
+    }
+
+    /// Runs the model on `path` again. The transcript it has, even an empty one, is forgotten
+    /// first, in memory and on disk, or transcribing would just hand it back.
+    fn retranscribe(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        if self.state.read(cx).manual_model().is_none() {
+            return;
+        }
+        crate::transcript::forget_cached(&path);
+        self.state.update(cx, |s, cx| {
+            s.transcripts.remove(&path);
+            s.transcribe_now(path, cx);
+        });
     }
 
     fn close_menu(&mut self, cx: &mut Context<Self>) {
@@ -1124,16 +1197,10 @@ impl LibraryView {
             Action::Edit => self.edit(path, cx),
             Action::CopyFile => native::copy_file_to_pasteboard(&path),
             Action::CopyTranscript => self.copy_transcript(&path, cx),
-            Action::Transcribe => self.state.update(cx, |s, cx| s.transcribe_now(path, cx)),
-            // Forget the transcript first, or transcribing keeps the one it has.
-            Action::TranscribeAgain => self.state.update(cx, |s, cx| {
-                s.transcripts.remove(&path);
-                s.transcribe_now(path, cx);
-            }),
+            Action::Transcribe | Action::TranscribeAgain => self.retranscribe(path, cx),
             Action::Reveal => native::reveal_all_in_finder(&menu.paths),
             Action::Rename => self.rename(path, window, cx),
-            Action::Trash if self.detail.is_none() => self.trash_selection(cx),
-            Action::Trash => self.trash(menu.paths, cx),
+            Action::Trash => self.trash_and_select_next(menu.paths, cx),
         }
         cx.notify();
     }
@@ -1265,9 +1332,9 @@ impl LibraryView {
                     .child(
                         more_button(("more", index), theme)
                             .tooltip(tip("More"))
-                            .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                                 cx.stop_propagation();
-                                this.open_card_menu(index, event.position(), cx);
+                                this.open_card_menu(index, event.position(), window, cx);
                             })),
                     ),
             );
@@ -1282,8 +1349,17 @@ impl LibraryView {
             .cursor_pointer()
             .on_mouse_down(
                 MouseButton::Right,
-                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                    this.open_card_menu(index, event.position, cx)
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    this.open_card_menu(index, event.position, window, cx)
+                }),
+            )
+            // ⌃-click is a right-click on the Mac.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    if event.modifiers.control {
+                        this.open_card_menu(index, event.position, window, cx)
+                    }
                 }),
             )
             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
@@ -1396,7 +1472,9 @@ impl LibraryView {
                     .child(
                         header_button("more", "⋯")
                             .tooltip(tip("More"))
-                            .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                                native::focus_search_field(window, None);
+                                window.focus(&this.focus);
                                 this.menu = Some(Menu {
                                     paths: vec![path.clone()],
                                     at: event.position(),
@@ -1426,6 +1504,15 @@ impl LibraryView {
         let volume_bar = detail.volume_bar.clone();
         let playback = PLAYBACK.get();
         let volume = if playback.muted { 0. } else { playback.volume };
+        // The rate actually playing, which J and L change for a while; else the speed play
+        // will use.
+        let rate = detail.player.rate();
+        let speed = if rate == 0. { playback.speed } else { rate };
+        let speed_label = if speed < 0. {
+            format!("−{}x", -speed)
+        } else {
+            format!("{speed}x")
+        };
 
         // A hairline edge keeps the black video frame from melting into the black window.
         let video = div()
@@ -1543,7 +1630,7 @@ impl LibraryView {
                     .cursor_pointer()
                     .text_size(px(12.))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(if playback.speed == 1. {
+                    .text_color(if speed == 1. {
                         theme.text_muted
                     } else {
                         theme.text
@@ -1551,7 +1638,7 @@ impl LibraryView {
                     .hover(|s| s.bg(theme.control_hover))
                     .tooltip(tip("Playback speed"))
                     .on_click(cx.listener(|this, _, _, cx| this.cycle_speed(cx)))
-                    .child(format!("{}x", playback.speed)),
+                    .child(speed_label),
             )
             .child(
                 div()
@@ -1805,9 +1892,11 @@ impl LibraryView {
                     .child(how),
             )
             .child(div().pt(px(4.)).child(
-                button("new-recording", "New recording", true, theme).on_click(cx.listener(
-                    |this, _, _, cx| this.state.update(cx, |s, cx| s.toggle_launcher(cx)),
-                )),
+                button("new-recording", "New recording", true, theme).on_click(
+                    cx.listener(|this, _, _, cx| {
+                        this.state.update(cx, |s, cx| s.open_launcher(cx))
+                    }),
+                ),
             ))
             .into_any_element()
     }
