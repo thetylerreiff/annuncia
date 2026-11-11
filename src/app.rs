@@ -819,6 +819,13 @@ impl Annuncia {
         });
     }
 
+    /// Opens the panel, leaving it open if it already is.
+    pub fn open_launcher(&mut self, cx: &mut Context<Self>) {
+        if self.launcher.is_none() {
+            self.toggle_launcher(cx);
+        }
+    }
+
     pub fn close_launcher(&mut self, cx: &mut Context<Self>) {
         if let Some(handle) = self.launcher.take() {
             self.launcher_closed_at = Some(Instant::now());

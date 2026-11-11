@@ -1891,9 +1891,11 @@ impl LibraryView {
                     .child(how),
             )
             .child(div().pt(px(4.)).child(
-                button("new-recording", "New recording", true, theme).on_click(cx.listener(
-                    |this, _, _, cx| this.state.update(cx, |s, cx| s.toggle_launcher(cx)),
-                )),
+                button("new-recording", "New recording", true, theme).on_click(
+                    cx.listener(|this, _, _, cx| {
+                        this.state.update(cx, |s, cx| s.open_launcher(cx))
+                    }),
+                ),
             ))
             .into_any_element()
     }
