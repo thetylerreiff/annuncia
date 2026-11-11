@@ -1296,6 +1296,23 @@ impl Annuncia {
         cx.notify();
     }
 
+    /// The editor saved its edit as a new recording beside the original, which is unchanged.
+    pub fn edit_copied(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        self.editor_window = None;
+        self.editing = None;
+        self.library.add(path.clone());
+        self.library_revision += 1;
+        self.transcribe(path.clone(), cx);
+        if !self.phase.is_active() {
+            self.phase = Phase::Saved {
+                path,
+                until: Instant::now() + Duration::from_secs(8),
+            };
+            self.sync_windows(cx);
+        }
+        cx.notify();
+    }
+
     // MARK: transcripts
 
     /// Transcribes `path` in the background when transcription is on and its model is ready.

@@ -12,12 +12,12 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, App, AppContext as _, Bounds, Context, Entity, FocusHandle, Focusable, FontWeight,
-    InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
+    AnyElement, App, AppContext as _, Bounds, ClickEvent, Context, Entity, FocusHandle, Focusable,
+    FontWeight, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, ObjectFit, ParentElement as _, Pixels, Render, ScrollHandle,
-    SharedString, StatefulInteractiveElement as _, Styled as _, TitlebarOptions, Window,
-    WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowOptions, canvas, div, hsla,
-    prelude::FluentBuilder as _, px, relative, size, surface,
+    ScrollWheelEvent, SharedString, StatefulInteractiveElement as _, Styled as _, TitlebarOptions,
+    Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowOptions, canvas, div,
+    hsla, prelude::FluentBuilder as _, px, relative, size, surface,
 };
 use objc2::MainThreadMarker;
 
@@ -31,16 +31,29 @@ use crate::speech;
 use crate::transcript::{Piece, Transcript, timestamp};
 use crate::ui::hud::format_elapsed;
 use crate::ui::icons::icon;
-use crate::ui::transcript_view::{self, dithered_note, paragraph_of};
+use crate::ui::transcript_view::{dithered_note, paragraph_of};
 use crate::ui::{Theme, button, keycap};
 
-/// Waveform bars across the timeline.
+/// Waveform bars across the timeline's view.
 const BARS: usize = 220;
+/// Waveform resolution, read once from the audio: enough for the timeline fully zoomed in.
+const PEAKS_PER_SECOND: usize = 50;
+/// Fully zoomed in, a second of the recording is this wide (in points), so even a short pause
+/// is easy to grab.
+const MAX_SECOND_WIDTH: f64 = 50.;
+/// Spacings for the ruler's time labels, in seconds; it takes the first that isn't crowded.
+const RULER_STEPS: [f64; 13] = [
+    1., 2., 5., 10., 15., 30., 60., 120., 300., 600., 900., 1800., 3600.,
+];
+/// Narrowest gap (in points) between ruler labels.
+const RULER_SPACING: f64 = 72.;
 /// Trim handles sit just inside their clip's kept part, so the two at a split read as `][`.
 const HANDLE_WIDTH: f32 = 12.;
 /// Extra reach (in points) around a handle for grabbing it.
 const HANDLE_SLOP: f32 = 4.;
 const TIMELINE_HEIGHT: f32 = 72.;
+/// Undo steps kept; the oldest go first.
+const UNDO_LIMIT: usize = 200;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Drag {
@@ -50,6 +63,12 @@ enum Drag {
     Scrub,
 }
 
+/// A state of the edit that undo returns to.
+struct Snapshot {
+    edit: Edit,
+    selected: Option<usize>,
+}
+
 pub struct Editor {
     state: Entity<Annuncia>,
     path: PathBuf,
@@ -57,12 +76,16 @@ pub struct Editor {
     player: Player,
     /// `None` until the file's length and waveform have loaded.
     edit: Option<Edit>,
+    /// Peak loudness every 1/`PEAKS_PER_SECOND` seconds.
     waveform: Vec<f32>,
     playhead: f64,
     /// Selected clip.
     selected: Option<usize>,
     drag: Option<Drag>,
     timeline: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Timeline zoom: 1 fits the whole recording, more shows less of it (see `view`).
+    zoom: f64,
+    view_start: f64,
     /// Export progress in thousandths while saving.
     saving: Option<Arc<AtomicU32>>,
     error: Option<SharedString>,
@@ -79,6 +102,17 @@ pub struct Editor {
     auto_cleaned: Option<bool>,
     /// The paragraph the transcript last scrolled to while following playback.
     followed_paragraph: Option<usize>,
+    /// Earlier states of the edit for ⌘Z, oldest first, and the ones it undid for ⇧⌘Z.
+    undo: Vec<Snapshot>,
+    redo: Vec<Snapshot>,
+    /// The edit as a handle drag found it, recorded as one undo step when the drag ends.
+    drag_before: Option<Snapshot>,
+    /// Closing would throw away an edit, so the toolbar is asking first.
+    confirm_discard: bool,
+    /// The transcript word a shift-click selects from, and the selected run of words (first
+    /// and last piece, inclusive) that ⌫ cuts.
+    word_anchor: Option<usize>,
+    selected_words: Option<(usize, usize)>,
 }
 
 /// `focus` must be false unless the app is active (see `app::when_active`).
@@ -101,18 +135,26 @@ pub fn open(
             traffic_light_position: Some(gpui::point(px(14.), px(14.))),
         }),
         window_background: WindowBackgroundAppearance::Opaque,
-        window_min_size: Some(size(px(820.), px(520.))),
+        // Wide enough for the toolbar with every button showing (Reset and Save as copy appear
+        // once the timeline is edited).
+        window_min_size: Some(size(px(880.), px(520.))),
         focus,
         show: true,
         ..Default::default()
     };
     cx.open_window(options, |window, cx| {
         let weak = state.downgrade();
+        let editor = cx.new(|cx| Editor::new(state, path, mtm, window, cx));
+        let weak_editor = editor.downgrade();
+        // The close button asks first, like Esc and Cancel, when there's an edit to lose.
         window.on_window_should_close(cx, move |_, cx| {
+            if let Ok(false) = weak_editor.update(cx, |this, cx| this.request_close(cx)) {
+                return false;
+            }
             let _ = weak.update(cx, |s, _| s.editor_closed());
             true
         });
-        cx.new(|cx| Editor::new(state, path, mtm, window, cx))
+        editor
     })
     .inspect_err(|err| eprintln!("annuncia: editor window: {err}"))
     .ok()
@@ -147,7 +189,10 @@ impl Editor {
             let duration = media::duration(&load);
             // One read of the audio feeds both the waveform and the pause map.
             let pcm = media::audio(&load, speech::SAMPLE_RATE as f64).unwrap_or_default();
-            let waveform = media::peaks(&pcm, BARS);
+            let waveform: Vec<f32> = pcm
+                .chunks(speech::SAMPLE_RATE / PEAKS_PER_SECOND)
+                .flat_map(|chunk| media::peaks(chunk, 1))
+                .collect();
             let silences = speech::silences(&pcm, 0.3);
             (duration, waveform, silences)
         });
@@ -191,6 +236,8 @@ impl Editor {
             selected: None,
             drag: None,
             timeline: Rc::new(Cell::new(None)),
+            zoom: 1.,
+            view_start: 0.,
             saving: None,
             error: None,
             copied: false,
@@ -200,6 +247,12 @@ impl Editor {
             touched: false,
             auto_cleaned: None,
             followed_paragraph: None,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            drag_before: None,
+            confirm_discard: false,
+            word_anchor: None,
+            selected_words: None,
         }
     }
 
@@ -221,6 +274,7 @@ impl Editor {
             }
             if (t - self.playhead).abs() > 1e-3 {
                 self.playhead = t;
+                self.reveal(t);
                 changed = true;
             }
         }
@@ -254,22 +308,26 @@ impl Editor {
 
     fn seek(&mut self, t: f64, exact: bool) {
         self.playhead = t;
+        self.reveal(t);
         self.player.seek(t, exact);
     }
 
     fn split(&mut self, cx: &mut Context<Self>) {
         self.touched = true;
         let t = self.playhead;
+        let before = self.snapshot();
         if let Some(edit) = &mut self.edit
             && edit.split(t)
         {
             self.selected = Some(edit.clip_at(t));
+            self.record(before);
             cx.notify();
         }
     }
 
     fn toggle_selected(&mut self, cx: &mut Context<Self>) {
         self.touched = true;
+        let before = self.snapshot();
         let Some(edit) = &mut self.edit else { return };
         let i = self.selected.unwrap_or_else(|| edit.clip_at(self.playhead));
         // Cutting the last kept clip would leave nothing to save.
@@ -279,6 +337,42 @@ impl Editor {
         }
         edit.toggle_removed(i);
         self.selected = Some(i);
+        self.record(before);
+        cx.notify();
+    }
+
+    /// A click on a transcript word seeks to it; a shift-click selects the run of words from
+    /// the one clicked before.
+    fn click_word(&mut self, i: usize, at: f64, shift: bool, cx: &mut Context<Self>) {
+        match self.word_anchor {
+            Some(anchor) if shift => self.selected_words = Some((anchor.min(i), anchor.max(i))),
+            _ => {
+                self.word_anchor = Some(i);
+                self.selected_words = None;
+            }
+        }
+        self.seek(at, true);
+        cx.notify();
+    }
+
+    /// Cuts the words selected in the transcript from the timeline, like a cut made there.
+    fn cut_words(&mut self, cx: &mut Context<Self>) {
+        let Some((first, last)) = self.selected_words.take() else {
+            return;
+        };
+        let transcript = self.transcript(cx);
+        let range = transcript.as_ref().and_then(|t| {
+            let (first, last) = (t.pieces.get(first)?, t.pieces.get(last)?);
+            Some(first.start..last.end)
+        });
+        self.touched = true;
+        let before = self.snapshot();
+        if let (Some(edit), Some(range)) = (&mut self.edit, range)
+            && edit.cut(range)
+        {
+            self.selected = None;
+            self.record(before);
+        }
         cx.notify();
     }
 
@@ -289,34 +383,40 @@ impl Editor {
         }
     }
 
-    /// Replaces the edit with automatic cuts: dead air, long pauses, and (when `fillers` and a
-    /// transcript is ready) filler words.
+    /// Adds automatic cuts to the edit: dead air, long pauses, and (when `fillers` and a
+    /// transcript is ready) filler words. Cuts made by hand stay.
     fn apply_clean_up(&mut self, fillers: bool, cx: &mut Context<Self>) {
         let transcript = fillers.then(|| self.transcript(cx)).flatten();
+        let before = self.snapshot();
         let Some(edit) = &mut self.edit else { return };
+        // Until it's touched, the edit holds nothing but earlier automatic clean up, which this
+        // redoes in full so the note counts all of it.
+        if !self.touched {
+            edit.reset();
+        }
         let plan = cleanup::plan(
             edit.duration,
             &self.silences,
             transcript.as_ref().map(|t| t.pieces.as_slice()),
         );
-        cleanup::apply(&plan, edit);
-        let spots =
-            plan.cuts.len() + usize::from(plan.start > 0.) + usize::from(plan.end < edit.duration);
+        let from = edit.kept_duration();
+        let spots = cleanup::apply(&plan, edit);
         self.cleanup_note = Some(if spots == 0 {
             "Nothing to clean up".into()
         } else {
             format!(
-                "Cleaned up {spots} {}, {} shorter",
+                "Cleaned up {spots} {}, {} shorter. ⌘Z to undo",
                 if spots == 1 { "spot" } else { "spots" },
-                timestamp(plan.saved(edit.duration))
+                timestamp(from - edit.kept_duration())
             )
             .into()
         });
         self.selected = None;
+        self.record(before);
         cx.notify();
     }
 
-    /// The Clean up button: everything it can find, replacing the current edit.
+    /// The Clean up button: everything it can find, added to the current edit.
     fn clean_up(&mut self, cx: &mut Context<Self>) {
         self.touched = true;
         self.apply_clean_up(true, cx);
@@ -342,11 +442,67 @@ impl Editor {
     fn reset(&mut self, cx: &mut Context<Self>) {
         self.touched = true;
         self.cleanup_note = None;
+        let before = self.snapshot();
         if let Some(edit) = &mut self.edit {
             edit.reset();
         }
         self.selected = None;
+        self.record(before);
         cx.notify();
+    }
+
+    fn snapshot(&self) -> Option<Snapshot> {
+        Some(Snapshot {
+            edit: self.edit.clone()?,
+            selected: self.selected,
+        })
+    }
+
+    /// Makes `before` the state ⌘Z returns to, if the edit has changed since. A new change
+    /// drops whatever ⇧⌘Z would have redone.
+    fn record(&mut self, before: Option<Snapshot>) {
+        let Some(before) = before else { return };
+        if self.edit.as_ref() == Some(&before.edit) {
+            return;
+        }
+        if self.undo.len() >= UNDO_LIMIT {
+            self.undo.remove(0);
+        }
+        self.undo.push(before);
+        self.redo.clear();
+    }
+
+    /// ⌘Z, or ⇧⌘Z when `redo`.
+    fn undo(&mut self, redo: bool, cx: &mut Context<Self>) {
+        if self.drag.is_some() {
+            return;
+        }
+        let Some(edit) = &mut self.edit else { return };
+        let (from, to) = if redo {
+            (&mut self.redo, &mut self.undo)
+        } else {
+            (&mut self.undo, &mut self.redo)
+        };
+        let Some(snapshot) = from.pop() else { return };
+        to.push(Snapshot {
+            edit: std::mem::replace(edit, snapshot.edit),
+            selected: std::mem::replace(&mut self.selected, snapshot.selected),
+        });
+        // Undoing automatic clean up mustn't let it run again.
+        self.touched = true;
+        self.cleanup_note = None;
+        cx.notify();
+    }
+
+    /// Whether closing can go ahead now. With an edit to lose, it can't: the toolbar asks
+    /// whether to discard it instead.
+    fn request_close(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.edit.as_ref().is_some_and(Edit::is_edited) {
+            self.confirm_discard = true;
+            cx.notify();
+            return false;
+        }
+        true
     }
 
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -355,9 +511,11 @@ impl Editor {
         window.remove_window();
     }
 
-    fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Saves the edit over the recording, or with `copy` as a new recording beside it that
+    /// leaves the original as it is.
+    fn save(&mut self, copy: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(edit) = &self.edit else { return };
-        if self.saving.is_some() {
+        if self.saving.is_some() || (copy && !edit.is_edited()) {
             return;
         }
         if !edit.is_edited() {
@@ -394,16 +552,34 @@ impl Editor {
             .inspect_err(|_| {
                 let _ = std::fs::remove_file(&temp);
             })?;
-            // Nothing is deleted outright: the unedited recording goes to the Trash.
-            let _ = crate::native::trash(&path);
-            std::fs::rename(&temp, &path)?;
-            anyhow::Ok(path)
+            let out = if copy {
+                // Beside the original, numbered when the name is taken.
+                let mut out = path.with_file_name(format!("{stem} (edited).mp4"));
+                let mut n = 1;
+                while out.exists() {
+                    n += 1;
+                    out = path.with_file_name(format!("{stem} (edited {n}).mp4"));
+                }
+                out
+            } else {
+                // Nothing is deleted outright: the unedited recording goes to the Trash.
+                let _ = crate::native::trash(&path);
+                path
+            };
+            std::fs::rename(&temp, &out)?;
+            anyhow::Ok(out)
         });
         cx.spawn_in(window, async move |this, cx| {
             let result = task.await;
             let _ = this.update_in(cx, |this, window, cx| match result {
                 Ok(path) => {
-                    this.state.update(cx, |s, cx| s.edit_saved(path, cx));
+                    this.state.update(cx, |s, cx| {
+                        if copy {
+                            s.edit_copied(path, cx);
+                        } else {
+                            s.edit_saved(path, cx);
+                        }
+                    });
                     window.remove_window();
                 }
                 Err(err) => {
@@ -419,20 +595,31 @@ impl Editor {
 
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let keystroke = &event.keystroke;
-        if keystroke.modifiers.platform && keystroke.key == "s" {
-            self.save(window, cx);
+        // ⌘ chords never fall through to the single-letter tools below (⌘C isn't Clean up).
+        if keystroke.modifiers.platform {
+            match keystroke.key.as_str() {
+                // ⇧⌘S saves as a copy.
+                "s" => self.save(keystroke.modifiers.shift, window, cx),
+                "z" => self.undo(keystroke.modifiers.shift, cx),
+                "=" | "+" => self.zoom_to(self.zoom * 2., self.playhead, cx),
+                "-" => self.zoom_to(self.zoom / 2., self.playhead, cx),
+                "0" => self.zoom_to(1., self.playhead, cx),
+                _ => {}
+            }
             return;
         }
         let step = if keystroke.modifiers.shift { 5. } else { 1. };
         match keystroke.key.as_str() {
             "space" => self.toggle_play(cx),
             "s" => self.split(cx),
+            "backspace" | "delete" if self.selected_words.is_some() => self.cut_words(cx),
             "backspace" | "delete" => self.toggle_selected(cx),
             // Trim the clip under the playhead to it.
             "c" => self.clean_up(cx),
             "i" | "o" => {
                 self.touched = true;
                 let t = self.playhead;
+                let before = self.snapshot();
                 if let Some(edit) = &mut self.edit {
                     let i = edit.clip_at(t);
                     if keystroke.key == "i" {
@@ -442,35 +629,161 @@ impl Editor {
                     }
                     self.selected = Some(i);
                 }
+                self.record(before);
                 cx.notify();
             }
-            "left" | "right" => {
+            // J steps back like ←.
+            "left" | "right" | "j" => {
                 let Some(duration) = self.edit.as_ref().map(|e| e.duration) else {
                     return;
                 };
-                let delta = if keystroke.key == "left" { -step } else { step };
+                let delta = if keystroke.key == "right" {
+                    step
+                } else {
+                    -step
+                };
                 self.seek((self.playhead + delta).clamp(0., duration), true);
                 cx.notify();
             }
-            "escape" => self.close(window, cx),
-            "enter" => self.save(window, cx),
+            // A frame back or forward, at the frame rate recordings are made at.
+            "," | "." => {
+                let Some(duration) = self.edit.as_ref().map(|e| e.duration) else {
+                    return;
+                };
+                let fps = f64::from(self.state.read(cx).settings.fps.max(1));
+                let delta = if keystroke.key == "," { -1. } else { 1. };
+                let frame = (self.playhead * fps).round() + delta;
+                self.player.pause();
+                self.seek((frame / fps).clamp(0., duration), true);
+                cx.notify();
+            }
+            "k" => {
+                self.player.pause();
+                cx.notify();
+            }
+            "l" if !self.player.is_playing() => self.toggle_play(cx),
+            // A second Esc keeps editing.
+            "escape" if self.confirm_discard => {
+                self.confirm_discard = false;
+                cx.notify();
+            }
+            "escape" if self.selected_words.is_some() => {
+                self.selected_words = None;
+                cx.notify();
+            }
+            "escape" => {
+                if self.request_close(cx) {
+                    self.close(window, cx);
+                }
+            }
+            "enter" => self.save(false, window, cx),
             _ => {}
+        }
+    }
+
+    /// The stretch of the recording the timeline shows: all of it at 1x, less zoomed in.
+    fn view(&self) -> Option<Range<f64>> {
+        let duration = self.edit.as_ref()?.duration;
+        let len = duration / self.zoom;
+        let start = self.view_start.clamp(0., duration - len);
+        Some(start..start + len)
+    }
+
+    /// The timeline's width in points, as last drawn.
+    fn timeline_width(&self) -> f64 {
+        self.timeline
+            .get()
+            .map_or(1000., |b| f64::from(f32::from(b.size.width)).max(1.))
+    }
+
+    /// Zooms the timeline, keeping time `anchor` where it is on screen (centring it when it's
+    /// out of view). Fully zoomed in, a second is `MAX_SECOND_WIDTH` wide.
+    fn zoom_to(&mut self, zoom: f64, anchor: f64, cx: &mut Context<Self>) {
+        let (Some(duration), Some(view)) = (self.edit.as_ref().map(|e| e.duration), self.view())
+        else {
+            return;
+        };
+        let max = (MAX_SECOND_WIDTH * duration / self.timeline_width()).max(1.);
+        let zoom = zoom.clamp(1., max);
+        let len = duration / zoom;
+        let fraction = if view.contains(&anchor) {
+            (anchor - view.start) / (view.end - view.start)
+        } else {
+            0.5
+        };
+        self.zoom = zoom;
+        self.view_start = (anchor - fraction * len).clamp(0., duration - len);
+        cx.notify();
+    }
+
+    /// Scrolls the zoomed-in timeline by `by` seconds.
+    fn pan(&mut self, by: f64, cx: &mut Context<Self>) {
+        let (Some(duration), Some(view)) = (self.edit.as_ref().map(|e| e.duration), self.view())
+        else {
+            return;
+        };
+        self.view_start = (view.start + by).clamp(0., duration - (view.end - view.start));
+        cx.notify();
+    }
+
+    /// Brings `t` into the zoomed-in timeline's view when it's outside it: a page ahead (so
+    /// playback is followed a page at a time), or back with room to keep stepping back.
+    fn reveal(&mut self, t: f64) {
+        let (Some(duration), Some(view)) = (self.edit.as_ref().map(|e| e.duration), self.view())
+        else {
+            return;
+        };
+        if (view.start..=view.end).contains(&t) {
+            return;
+        }
+        let len = view.end - view.start;
+        let start = if t < view.start { t - len * 0.75 } else { t };
+        self.view_start = start.clamp(0., duration - len);
+    }
+
+    /// ⌘-scroll zooms around the pointer; scrolling either way pans.
+    fn on_timeline_scroll(
+        &mut self,
+        event: &ScrollWheelEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(view) = self.view() else { return };
+        let delta = event.delta.pixel_delta(px(16.));
+        let (dx, dy) = (f64::from(f32::from(delta.x)), f64::from(f32::from(delta.y)));
+        if event.modifiers.platform {
+            let anchor = self.time_at(event.position.x).unwrap_or(self.playhead);
+            self.zoom_to(self.zoom * (dy / 100.).exp2(), anchor, cx);
+        } else {
+            // A mouse wheel only scrolls vertically, so the larger of the two pans.
+            let by = if dx.abs() >= dy.abs() { dx } else { dy };
+            self.pan(-by / self.timeline_width() * (view.end - view.start), cx);
         }
     }
 
     /// Timeline time under a window x position.
     fn time_at(&self, x: Pixels) -> Option<f64> {
         let bounds = self.timeline.get()?;
-        let edit = self.edit.as_ref()?;
+        let view = self.view()?;
         let width = f32::from(bounds.size.width).max(1.);
         let fraction = ((f32::from(x) - f32::from(bounds.origin.x)) / width).clamp(0., 1.);
-        Some(f64::from(fraction) * edit.duration)
+        Some(view.start + f64::from(fraction) * (view.end - view.start))
     }
 
     fn x_of(&self, t: f64) -> Option<f32> {
         let bounds = self.timeline.get()?;
-        let edit = self.edit.as_ref()?;
-        Some(f32::from(bounds.origin.x) + f32::from(bounds.size.width) * (t / edit.duration) as f32)
+        let view = self.view()?;
+        let fraction = (t - view.start) / (view.end - view.start);
+        Some(f32::from(bounds.origin.x) + f32::from(bounds.size.width) * fraction as f32)
+    }
+
+    /// Whether a clip's kept part, from `start` to `end`, is wide enough on screen for both its
+    /// handles. Narrower clips hide theirs, so handles never overlap; zooming in shows them.
+    fn handles_fit(&self, start: f64, end: f64) -> bool {
+        match (self.x_of(start), self.x_of(end)) {
+            (Some(start), Some(end)) => end - start >= 2. * HANDLE_WIDTH,
+            _ => true,
+        }
     }
 
     /// The handle under window x position `x`, if any.
@@ -478,7 +791,7 @@ impl Editor {
         let edit = self.edit.as_ref()?;
         let within = |lo: f32, hi: f32| x >= lo - HANDLE_SLOP && x <= hi + HANDLE_SLOP;
         edit.clips().iter().enumerate().find_map(|(i, clip)| {
-            if clip.removed {
+            if clip.removed || !self.handles_fit(clip.start, clip.end) {
                 return None;
             }
             let start = self.x_of(clip.start)?;
@@ -497,10 +810,13 @@ impl Editor {
         if self.edit.is_none() {
             return;
         }
+        // ⌫ goes back to deleting clips.
+        self.selected_words = None;
         let drag = self
             .handle_at(f32::from(event.position.x))
             .unwrap_or(Drag::Scrub);
         if let Drag::Start(i) | Drag::End(i) = drag {
+            self.drag_before = self.snapshot();
             self.selected = Some(i);
             self.touched = true;
         }
@@ -554,6 +870,8 @@ impl Editor {
 
     fn end_drag(&mut self) {
         self.drag = None;
+        let before = self.drag_before.take();
+        self.record(before);
         // Land on the exact frame once the pointer lets go.
         self.player.seek(self.playhead, true);
     }
@@ -637,9 +955,11 @@ impl Editor {
                 .child(self.error.clone().unwrap_or("Reading audio…".into()))
                 .into_any_element();
         };
-        let duration = edit.duration;
-        let at = |t: f64| relative((t / duration).clamp(0., 1.) as f32);
-        let span = |a: f64, b: f64| relative(((b - a) / duration).clamp(0., 1.) as f32);
+        // Positions across the view; zoomed in, what's outside it is clipped away below.
+        let view = self.view().unwrap_or(0.0..edit.duration);
+        let length = view.end - view.start;
+        let at = |t: f64| relative(((t - view.start) / length) as f32);
+        let span = |a: f64, b: f64| relative(((b - a) / length) as f32);
         let accent = theme.accent;
         let record = theme.record;
         let dim = theme.window.opacity(0.72);
@@ -653,8 +973,8 @@ impl Editor {
             .items_center()
             .gap(px(1.))
             .children(
-                self.waveform
-                    .iter()
+                visible_peaks(&self.waveform, &view)
+                    .into_iter()
                     .map(|peak| {
                         let height = (peak.clamp(0., 1.).sqrt() * (TIMELINE_HEIGHT - 20.)).max(2.);
                         div()
@@ -747,7 +1067,7 @@ impl Editor {
         let handles = edit
             .clips()
             .iter()
-            .filter(|c| !c.removed)
+            .filter(|c| !c.removed && self.handles_fit(c.start, c.end))
             .flat_map(|c| [handle(c.start, false), handle(c.end, true)]);
 
         let playhead = div()
@@ -768,8 +1088,9 @@ impl Editor {
                     .bg(record),
             );
 
+        let in_view = (view.start..=view.end).contains(&self.playhead);
         let bounds = self.timeline.clone();
-        div()
+        let timeline = div()
             .id("timeline")
             .relative()
             .h(px(TIMELINE_HEIGHT))
@@ -777,6 +1098,7 @@ impl Editor {
             .mt(px(10.))
             .cursor_pointer()
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_timeline_down))
+            .on_scroll_wheel(cx.listener(Self::on_timeline_scroll))
             .child(
                 div()
                     .absolute()
@@ -786,15 +1108,73 @@ impl Editor {
                     .bg(theme.control)
                     .child(bars),
             )
-            .children(frames)
+            // Clips and handles stop at the timeline's ends when zoomed in. The clipping layer
+            // reaches a little above and below so the handles' overhang still shows.
+            .child(
+                div()
+                    .absolute()
+                    .top(px(-4.))
+                    .bottom(px(-4.))
+                    .left_0()
+                    .right_0()
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .absolute()
+                            .top(px(4.))
+                            .bottom(px(4.))
+                            .left_0()
+                            .right_0()
+                            .children(frames)
+                            .children(handles),
+                    ),
+            )
             .child(
                 canvas(move |b, _, _| bounds.set(Some(b)), |_, _, _, _| {})
                     .absolute()
                     .inset_0(),
             )
-            .children(handles)
-            .child(playhead)
+            .when(in_view, |d| d.child(playhead));
+
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .child(self.ruler(&view, theme))
+            .child(timeline)
             .into_any_element()
+    }
+
+    /// Time labels above the timeline, as far apart as it takes not to crowd.
+    fn ruler(&self, view: &Range<f64>, theme: Theme) -> impl IntoElement {
+        let length = view.end - view.start;
+        let width = self.timeline_width();
+        let step = RULER_STEPS
+            .into_iter()
+            .find(|step| step / length * width >= RULER_SPACING)
+            .unwrap_or(RULER_STEPS[RULER_STEPS.len() - 1]);
+        let first = (view.start / step).ceil() as u64;
+        let last = (view.end / step).floor() as u64;
+        div()
+            .relative()
+            .h(px(14.))
+            .w_full()
+            .overflow_hidden()
+            .text_size(px(10.))
+            .text_color(theme.text_muted)
+            .children((first..=last).map(|n| {
+                let t = n as f64 * step;
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(relative(((t - view.start) / length) as f32))
+                    .pl(px(4.))
+                    .border_l_1()
+                    .border_color(theme.hairline)
+                    .whitespace_nowrap()
+                    .child(timestamp(t))
+            }))
     }
 
     fn toolbar(&self, theme: Theme, cx: &mut Context<Self>) -> impl IntoElement {
@@ -892,6 +1272,13 @@ impl Editor {
                     .px(px(4.))
                     .text_size(px(12.))
                     .map(|d| match (self.error.clone(), self.cleanup_note.clone()) {
+                        _ if self.confirm_discard => d.child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .font_weight(FontWeight::MEDIUM)
+                                .child("Discard changes?"),
+                        ),
                         (Some(error), _) => d.child(
                             div()
                                 .min_w_0()
@@ -909,15 +1296,45 @@ impl Editor {
                         (None, None) => d,
                     }),
             )
-            .child(
-                button("cancel", "Cancel", false, theme)
-                    .on_click(cx.listener(|this, _, window, cx| this.close(window, cx))),
-            )
-            .child(
-                button("save", save_label, true, theme)
-                    .when(self.saving.is_some(), |b| b.opacity(0.7))
-                    .on_click(cx.listener(|this, _, window, cx| this.save(window, cx))),
-            )
+            .map(|d| {
+                if self.confirm_discard {
+                    d.child(
+                        button("keep", "Keep editing", false, theme).on_click(cx.listener(
+                            |this, _, _, cx| {
+                                this.confirm_discard = false;
+                                cx.notify();
+                            },
+                        )),
+                    )
+                    .child(
+                        button("discard", "Discard", true, theme)
+                            .bg(theme.record)
+                            .on_click(cx.listener(|this, _, window, cx| this.close(window, cx))),
+                    )
+                } else {
+                    d.child(
+                        button("cancel", "Cancel", false, theme).on_click(cx.listener(
+                            |this, _, window, cx| {
+                                if this.request_close(cx) {
+                                    this.close(window, cx);
+                                }
+                            },
+                        )),
+                    )
+                    .when(edited && self.saving.is_none(), |d| {
+                        d.child(button("save-copy", "Save as copy", false, theme).on_click(
+                            cx.listener(|this, _, window, cx| this.save(true, window, cx)),
+                        ))
+                    })
+                    .child(
+                        button("save", save_label, true, theme)
+                            .when(self.saving.is_some(), |b| b.opacity(0.7))
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.save(false, window, cx)),
+                            ),
+                    )
+                }
+            })
     }
 }
 
@@ -981,19 +1398,7 @@ impl Editor {
                     kept.as_ref()
                         .is_some_and(|k| !k.iter().any(|r| mid >= r.start && mid < r.end))
                 };
-                transcript_view::paragraphs(
-                    &transcript,
-                    &paragraphs,
-                    current,
-                    is_cut,
-                    &self.transcript_scroll,
-                    theme,
-                    cx,
-                    |this: &mut Self, t, cx| {
-                        this.seek(t, true);
-                        cx.notify();
-                    },
-                )
+                self.transcript_words(&transcript, &paragraphs, current, is_cut, theme, cx)
             }
         };
 
@@ -1009,6 +1414,88 @@ impl Editor {
             .border_color(theme.hairline)
             .child(header)
             .child(body)
+            .into_any_element()
+    }
+
+    /// The transcript as timestamped paragraphs of clickable words, as
+    /// `transcript_view::paragraphs` draws it for the library, plus a selection: shift-click
+    /// selects a run of words for ⌫ to cut.
+    fn transcript_words(
+        &self,
+        transcript: &Transcript,
+        paragraphs: &[Vec<usize>],
+        current: Option<usize>,
+        is_cut: impl Fn(&Piece) -> bool,
+        theme: Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let selected = |i: usize| {
+            self.selected_words
+                .is_some_and(|(first, last)| (first..=last).contains(&i))
+        };
+        div()
+            .id("transcript")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .track_scroll(&self.transcript_scroll)
+            .px(px(14.))
+            .pb(px(14.))
+            .flex()
+            .flex_col()
+            .gap(px(12.))
+            .children(paragraphs.iter().enumerate().map(|(p, indices)| {
+                let start = transcript.pieces[indices[0]].start;
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("paragraph-{p}")))
+                            .text_size(px(11.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(theme.text_muted)
+                            .cursor_pointer()
+                            .hover(|s| s.text_color(theme.accent_soft))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.seek(start, true);
+                                cx.notify();
+                            }))
+                            .child(timestamp(start)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .text_size(px(13.))
+                            .line_height(px(20.))
+                            .children(indices.iter().map(|&i| {
+                                let piece = &transcript.pieces[i];
+                                let at = piece.start;
+                                let plain = !selected(i) && current != Some(i);
+                                div()
+                                    .id(SharedString::from(format!("word-{i}")))
+                                    .px(px(2.))
+                                    .rounded(px(4.))
+                                    .cursor_pointer()
+                                    .when(selected(i), |d| d.bg(theme.accent.opacity(0.45)))
+                                    .when(!selected(i) && current == Some(i), |d| {
+                                        d.bg(theme.accent.opacity(0.28))
+                                    })
+                                    .when(plain, |d| d.hover(|s| s.bg(theme.control_hover)))
+                                    .when(is_cut(piece), |d| {
+                                        d.text_color(theme.text_muted.opacity(0.6))
+                                    })
+                                    .on_click(cx.listener(
+                                        move |this, event: &ClickEvent, _, cx| {
+                                            this.click_word(i, at, event.modifiers().shift, cx)
+                                        },
+                                    ))
+                                    .child(piece.text.clone())
+                            })),
+                    )
+            }))
             .into_any_element()
     }
 
@@ -1076,4 +1563,25 @@ fn tool_button(
         .child(icon(name, 14., theme.text))
         .child(label)
         .child(keycap(key, theme.text_muted))
+}
+
+/// The loudest of `peaks` (`PEAKS_PER_SECOND` apart) under each of `BARS` bars across `view`.
+fn visible_peaks(peaks: &[f32], view: &Range<f64>) -> Vec<f32> {
+    if peaks.is_empty() {
+        return Vec::new();
+    }
+    let rate = PEAKS_PER_SECOND as f64;
+    let per_bar = (view.end - view.start) * rate / BARS as f64;
+    let first = view.start * rate;
+    (0..BARS)
+        .map(|bar| {
+            let lo = (first + bar as f64 * per_bar) as usize;
+            let hi = ((first + (bar + 1) as f64 * per_bar) as usize)
+                .max(lo + 1)
+                .min(peaks.len());
+            peaks
+                .get(lo..hi)
+                .map_or(0., |p| p.iter().copied().fold(0., f32::max))
+        })
+        .collect()
 }
