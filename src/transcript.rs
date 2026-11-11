@@ -181,6 +181,13 @@ pub fn load_cached(video: &Path) -> Option<Transcript> {
     serde_json::from_str(&text).ok()
 }
 
+/// Drops `video`'s cached transcript, so the next transcription runs the model again.
+pub fn forget_cached(video: &Path) {
+    if let Some(path) = cache_path(video) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 pub fn save_cached(video: &Path, transcript: &Transcript) {
     let Some(path) = cache_path(video) else {
         return;

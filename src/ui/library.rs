@@ -1105,6 +1105,19 @@ impl LibraryView {
         cx.notify();
     }
 
+    /// Runs the model on `path` again. The transcript it has, even an empty one, is forgotten
+    /// first, in memory and on disk, or transcribing would just hand it back.
+    fn retranscribe(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        if self.state.read(cx).manual_model().is_none() {
+            return;
+        }
+        crate::transcript::forget_cached(&path);
+        self.state.update(cx, |s, cx| {
+            s.transcripts.remove(&path);
+            s.transcribe_now(path, cx);
+        });
+    }
+
     fn close_menu(&mut self, cx: &mut Context<Self>) {
         if self.menu.take().is_some() {
             cx.notify();
@@ -1124,12 +1137,7 @@ impl LibraryView {
             Action::Edit => self.edit(path, cx),
             Action::CopyFile => native::copy_file_to_pasteboard(&path),
             Action::CopyTranscript => self.copy_transcript(&path, cx),
-            Action::Transcribe => self.state.update(cx, |s, cx| s.transcribe_now(path, cx)),
-            // Forget the transcript first, or transcribing keeps the one it has.
-            Action::TranscribeAgain => self.state.update(cx, |s, cx| {
-                s.transcripts.remove(&path);
-                s.transcribe_now(path, cx);
-            }),
+            Action::Transcribe | Action::TranscribeAgain => self.retranscribe(path, cx),
             Action::Reveal => native::reveal_all_in_finder(&menu.paths),
             Action::Rename => self.rename(path, window, cx),
             Action::Trash if self.detail.is_none() => self.trash_selection(cx),
