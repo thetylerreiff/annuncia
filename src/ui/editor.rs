@@ -135,7 +135,9 @@ pub fn open(
             traffic_light_position: Some(gpui::point(px(14.), px(14.))),
         }),
         window_background: WindowBackgroundAppearance::Opaque,
-        window_min_size: Some(size(px(820.), px(520.))),
+        // Wide enough for the toolbar with every button showing (Reset and Save as copy appear
+        // once the timeline is edited).
+        window_min_size: Some(size(px(880.), px(520.))),
         focus,
         show: true,
         ..Default::default()
