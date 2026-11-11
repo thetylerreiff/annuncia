@@ -12,8 +12,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, App, AppContext as _, Bounds, Context, Entity, FocusHandle, Focusable, FontWeight,
-    InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
+    AnyElement, App, AppContext as _, Bounds, ClickEvent, Context, Entity, FocusHandle, Focusable,
+    FontWeight, InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, ObjectFit, ParentElement as _, Pixels, Render, ScrollHandle,
     ScrollWheelEvent, SharedString, StatefulInteractiveElement as _, Styled as _, TitlebarOptions,
     Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowOptions, canvas, div,
@@ -31,7 +31,7 @@ use crate::speech;
 use crate::transcript::{Piece, Transcript, timestamp};
 use crate::ui::hud::format_elapsed;
 use crate::ui::icons::icon;
-use crate::ui::transcript_view::{self, dithered_note, paragraph_of};
+use crate::ui::transcript_view::{dithered_note, paragraph_of};
 use crate::ui::{Theme, button, keycap};
 
 /// Waveform bars across the timeline's view.
@@ -109,6 +109,10 @@ pub struct Editor {
     drag_before: Option<Snapshot>,
     /// Closing would throw away an edit, so the toolbar is asking first.
     confirm_discard: bool,
+    /// The transcript word a shift-click selects from, and the selected run of words (first
+    /// and last piece, inclusive) that ⌫ cuts.
+    word_anchor: Option<usize>,
+    selected_words: Option<(usize, usize)>,
 }
 
 /// `focus` must be false unless the app is active (see `app::when_active`).
@@ -245,6 +249,8 @@ impl Editor {
             redo: Vec::new(),
             drag_before: None,
             confirm_discard: false,
+            word_anchor: None,
+            selected_words: None,
         }
     }
 
@@ -330,6 +336,41 @@ impl Editor {
         edit.toggle_removed(i);
         self.selected = Some(i);
         self.record(before);
+        cx.notify();
+    }
+
+    /// A click on a transcript word seeks to it; a shift-click selects the run of words from
+    /// the one clicked before.
+    fn click_word(&mut self, i: usize, at: f64, shift: bool, cx: &mut Context<Self>) {
+        match self.word_anchor {
+            Some(anchor) if shift => self.selected_words = Some((anchor.min(i), anchor.max(i))),
+            _ => {
+                self.word_anchor = Some(i);
+                self.selected_words = None;
+            }
+        }
+        self.seek(at, true);
+        cx.notify();
+    }
+
+    /// Cuts the words selected in the transcript from the timeline, like a cut made there.
+    fn cut_words(&mut self, cx: &mut Context<Self>) {
+        let Some((first, last)) = self.selected_words.take() else {
+            return;
+        };
+        let transcript = self.transcript(cx);
+        let range = transcript.as_ref().and_then(|t| {
+            let (first, last) = (t.pieces.get(first)?, t.pieces.get(last)?);
+            Some(first.start..last.end)
+        });
+        self.touched = true;
+        let before = self.snapshot();
+        if let (Some(edit), Some(range)) = (&mut self.edit, range)
+            && edit.cut(range)
+        {
+            self.selected = None;
+            self.record(before);
+        }
         cx.notify();
     }
 
@@ -569,6 +610,7 @@ impl Editor {
         match keystroke.key.as_str() {
             "space" => self.toggle_play(cx),
             "s" => self.split(cx),
+            "backspace" | "delete" if self.selected_words.is_some() => self.cut_words(cx),
             "backspace" | "delete" => self.toggle_selected(cx),
             // Trim the clip under the playhead to it.
             "c" => self.clean_up(cx),
@@ -621,6 +663,10 @@ impl Editor {
             // A second Esc keeps editing.
             "escape" if self.confirm_discard => {
                 self.confirm_discard = false;
+                cx.notify();
+            }
+            "escape" if self.selected_words.is_some() => {
+                self.selected_words = None;
                 cx.notify();
             }
             "escape" => {
@@ -762,6 +808,8 @@ impl Editor {
         if self.edit.is_none() {
             return;
         }
+        // ⌫ goes back to deleting clips.
+        self.selected_words = None;
         let drag = self
             .handle_at(f32::from(event.position.x))
             .unwrap_or(Drag::Scrub);
@@ -1348,19 +1396,7 @@ impl Editor {
                     kept.as_ref()
                         .is_some_and(|k| !k.iter().any(|r| mid >= r.start && mid < r.end))
                 };
-                transcript_view::paragraphs(
-                    &transcript,
-                    &paragraphs,
-                    current,
-                    is_cut,
-                    &self.transcript_scroll,
-                    theme,
-                    cx,
-                    |this: &mut Self, t, cx| {
-                        this.seek(t, true);
-                        cx.notify();
-                    },
-                )
+                self.transcript_words(&transcript, &paragraphs, current, is_cut, theme, cx)
             }
         };
 
@@ -1376,6 +1412,88 @@ impl Editor {
             .border_color(theme.hairline)
             .child(header)
             .child(body)
+            .into_any_element()
+    }
+
+    /// The transcript as timestamped paragraphs of clickable words, as
+    /// `transcript_view::paragraphs` draws it for the library, plus a selection: shift-click
+    /// selects a run of words for ⌫ to cut.
+    fn transcript_words(
+        &self,
+        transcript: &Transcript,
+        paragraphs: &[Vec<usize>],
+        current: Option<usize>,
+        is_cut: impl Fn(&Piece) -> bool,
+        theme: Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let selected = |i: usize| {
+            self.selected_words
+                .is_some_and(|(first, last)| (first..=last).contains(&i))
+        };
+        div()
+            .id("transcript")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .track_scroll(&self.transcript_scroll)
+            .px(px(14.))
+            .pb(px(14.))
+            .flex()
+            .flex_col()
+            .gap(px(12.))
+            .children(paragraphs.iter().enumerate().map(|(p, indices)| {
+                let start = transcript.pieces[indices[0]].start;
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.))
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("paragraph-{p}")))
+                            .text_size(px(11.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(theme.text_muted)
+                            .cursor_pointer()
+                            .hover(|s| s.text_color(theme.accent_soft))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.seek(start, true);
+                                cx.notify();
+                            }))
+                            .child(timestamp(start)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .text_size(px(13.))
+                            .line_height(px(20.))
+                            .children(indices.iter().map(|&i| {
+                                let piece = &transcript.pieces[i];
+                                let at = piece.start;
+                                let plain = !selected(i) && current != Some(i);
+                                div()
+                                    .id(SharedString::from(format!("word-{i}")))
+                                    .px(px(2.))
+                                    .rounded(px(4.))
+                                    .cursor_pointer()
+                                    .when(selected(i), |d| d.bg(theme.accent.opacity(0.45)))
+                                    .when(!selected(i) && current == Some(i), |d| {
+                                        d.bg(theme.accent.opacity(0.28))
+                                    })
+                                    .when(plain, |d| d.hover(|s| s.bg(theme.control_hover)))
+                                    .when(is_cut(piece), |d| {
+                                        d.text_color(theme.text_muted.opacity(0.6))
+                                    })
+                                    .on_click(cx.listener(
+                                        move |this, event: &ClickEvent, _, cx| {
+                                            this.click_word(i, at, event.modifiers().shift, cx)
+                                        },
+                                    ))
+                                    .child(piece.text.clone())
+                            })),
+                    )
+            }))
             .into_any_element()
     }
 
