@@ -1,7 +1,8 @@
 //! The editor that opens after a recording: a preview, and a waveform timeline where the
-//! recording can be split into clips, each with its own trim handles, and clips deleted. Saving re-encodes the kept
-//! parts so every cut is frame-exact, then replaces the recording (the original goes to the
-//! Trash).
+//! recording can be split into clips, each with its own trim handles, and clips deleted. Saving
+//! re-encodes the kept parts so every cut is frame-exact, then replaces the recording (the
+//! original goes to the Trash); Save as copy writes the edit beside it instead and leaves the
+//! original as it is.
 
 use std::cell::Cell;
 use std::ops::Range;
@@ -652,8 +653,8 @@ impl Editor {
             "space" => self.toggle_play(cx),
             "s" => self.split(cx),
             "backspace" | "delete" => self.delete(cx),
-            // Trim the clip under the playhead to it.
             "c" => self.clean_up(cx),
+            // Trim the clip under the playhead to it.
             "i" | "o" => {
                 self.touched = true;
                 let t = self.playhead;
