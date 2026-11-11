@@ -5,7 +5,7 @@ use crate::native::{self, TopLeftRect};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TrayAction {
-    /// Left click on the icon.
+    /// Left click on the icon: stops a recording, otherwise opens the recorder.
     Clicked,
     ToggleRecording,
     TogglePause,
@@ -63,7 +63,7 @@ impl Tray {
             &MenuItem::with_id(LAUNCHER, "Open Recorder…", true, None),
             &PredefinedMenuItem::separator(),
             &MenuItem::with_id(LIBRARY, "Library…", true, None),
-            &MenuItem::with_id(FOLDER, "Open Recordings Folder", true, None),
+            &MenuItem::with_id(FOLDER, "Show Recordings in Finder", true, None),
             &MenuItem::with_id(SETTINGS, "Settings…", true, None),
             &updates_item,
             &PredefinedMenuItem::separator(),
@@ -121,7 +121,16 @@ impl Tray {
             return;
         }
         self.state = state;
-        // The icon itself stays put: the notch HUD shows that a recording is running.
+        // The icon shows a recording too, for when the HUD is out of sight: a red dot, or a red
+        // ring while paused. Neither is a template image, so macOS doesn't tint the red away.
+        let shown = match state {
+            TrayState::Idle => self.icon.set_icon_templated(Some(idle_icon())),
+            TrayState::Recording => self.icon.set_icon(Some(recording_icon())),
+            TrayState::Paused => self.icon.set_icon(Some(paused_icon())),
+        };
+        if let Err(err) = shown {
+            eprintln!("annuncia: menu bar icon: {err}");
+        }
         self.toggle_item.set_text(if state == TrayState::Idle {
             "Start Recording"
         } else {
@@ -161,6 +170,19 @@ fn idle_icon() -> Icon {
         let dot = d < 6.5;
         if ring || dot { Some([0, 0, 0]) } else { None }
     })
+}
+
+/// The HUD's record red.
+const RECORD: [u8; 3] = [0xff, 0x45, 0x3a];
+
+/// A filled red dot, drawn as is.
+fn recording_icon() -> Icon {
+    draw_icon(|d| (d < 10.).then_some(RECORD))
+}
+
+/// A red ring, like the HUD's dot while paused.
+fn paused_icon() -> Icon {
+    draw_icon(|d| ((d - 8.5).abs() < 2.).then_some(RECORD))
 }
 
 fn draw_icon(shade: impl Fn(f32) -> Option<[u8; 3]>) -> Icon {

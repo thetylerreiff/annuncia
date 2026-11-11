@@ -345,6 +345,10 @@ impl Annuncia {
     fn pump(&mut self, cx: &mut Context<Self>) {
         for action in self.tray.poll() {
             match action {
+                // The recorder can't open mid-recording, so a click there stops it instead.
+                TrayAction::Clicked if matches!(self.phase, Phase::Recording { .. }) => {
+                    self.stop_recording(cx)
+                }
                 TrayAction::Clicked | TrayAction::OpenLauncher => self.toggle_launcher(cx),
                 TrayAction::ToggleRecording => self.toggle_recording(cx),
                 TrayAction::TogglePause => self.toggle_pause(cx),
