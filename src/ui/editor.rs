@@ -505,12 +505,16 @@ impl Editor {
 
     /// Whether the toolbar is asking to discard changes, which only holds while there are some.
     fn asking(&self) -> bool {
-        self.confirm_discard && self.has_changes()
+        self.confirm_discard && self.has_changes() && self.saving.is_none()
     }
 
-    /// Whether closing can go ahead now. With changes to lose, it can't: the toolbar asks
-    /// whether to discard them instead.
+    /// Whether closing can go ahead now. Never while saving, which must finish to hand the
+    /// result to the app. With changes to lose, it can't either: the toolbar asks whether to
+    /// discard them instead.
     fn request_close(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.saving.is_some() {
+            return false;
+        }
         if self.has_changes() {
             self.confirm_discard = true;
             cx.notify();
@@ -520,6 +524,10 @@ impl Editor {
     }
 
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // A save under way finishes first (its result closes the window).
+        if self.saving.is_some() {
+            return;
+        }
         self.player.pause();
         self.state.update(cx, |s, _| s.editor_closed());
         window.remove_window();
@@ -544,6 +552,7 @@ impl Editor {
         }
         self.player.pause();
         self.error = None;
+        self.confirm_discard = false;
         let progress = Arc::new(AtomicU32::new(0));
         self.saving = Some(progress.clone());
         let codec = self.state.read(cx).settings.codec;
@@ -1328,13 +1337,13 @@ impl Editor {
                     )
                 } else {
                     d.child(
-                        button("cancel", "Cancel", false, theme).on_click(cx.listener(
-                            |this, _, window, cx| {
+                        button("cancel", "Cancel", false, theme)
+                            .when(self.saving.is_some(), |b| b.opacity(0.5))
+                            .on_click(cx.listener(|this, _, window, cx| {
                                 if this.request_close(cx) {
                                     this.close(window, cx);
                                 }
-                            },
-                        )),
+                            })),
                     )
                     .when(edited && self.saving.is_none(), |d| {
                         d.child(button("save-copy", "Save as copy", false, theme).on_click(
