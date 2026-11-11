@@ -41,6 +41,8 @@ const HANDLE_WIDTH: f32 = 12.;
 /// Extra reach (in points) around a handle for grabbing it.
 const HANDLE_SLOP: f32 = 4.;
 const TIMELINE_HEIGHT: f32 = 72.;
+/// Undo steps kept; the oldest go first.
+const UNDO_LIMIT: usize = 200;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Drag {
@@ -48,6 +50,12 @@ enum Drag {
     Start(usize),
     End(usize),
     Scrub,
+}
+
+/// A state of the edit that undo returns to.
+struct Snapshot {
+    edit: Edit,
+    selected: Option<usize>,
 }
 
 pub struct Editor {
@@ -79,6 +87,11 @@ pub struct Editor {
     auto_cleaned: Option<bool>,
     /// The paragraph the transcript last scrolled to while following playback.
     followed_paragraph: Option<usize>,
+    /// Earlier states of the edit for ⌘Z, oldest first, and the ones it undid for ⇧⌘Z.
+    undo: Vec<Snapshot>,
+    redo: Vec<Snapshot>,
+    /// The edit as a handle drag found it, recorded as one undo step when the drag ends.
+    drag_before: Option<Snapshot>,
 }
 
 /// `focus` must be false unless the app is active (see `app::when_active`).
@@ -200,6 +213,9 @@ impl Editor {
             touched: false,
             auto_cleaned: None,
             followed_paragraph: None,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            drag_before: None,
         }
     }
 
@@ -260,16 +276,19 @@ impl Editor {
     fn split(&mut self, cx: &mut Context<Self>) {
         self.touched = true;
         let t = self.playhead;
+        let before = self.snapshot();
         if let Some(edit) = &mut self.edit
             && edit.split(t)
         {
             self.selected = Some(edit.clip_at(t));
+            self.record(before);
             cx.notify();
         }
     }
 
     fn toggle_selected(&mut self, cx: &mut Context<Self>) {
         self.touched = true;
+        let before = self.snapshot();
         let Some(edit) = &mut self.edit else { return };
         let i = self.selected.unwrap_or_else(|| edit.clip_at(self.playhead));
         // Cutting the last kept clip would leave nothing to save.
@@ -279,6 +298,7 @@ impl Editor {
         }
         edit.toggle_removed(i);
         self.selected = Some(i);
+        self.record(before);
         cx.notify();
     }
 
@@ -293,6 +313,7 @@ impl Editor {
     /// transcript is ready) filler words.
     fn apply_clean_up(&mut self, fillers: bool, cx: &mut Context<Self>) {
         let transcript = fillers.then(|| self.transcript(cx)).flatten();
+        let before = self.snapshot();
         let Some(edit) = &mut self.edit else { return };
         let plan = cleanup::plan(
             edit.duration,
@@ -313,6 +334,7 @@ impl Editor {
             .into()
         });
         self.selected = None;
+        self.record(before);
         cx.notify();
     }
 
@@ -342,10 +364,55 @@ impl Editor {
     fn reset(&mut self, cx: &mut Context<Self>) {
         self.touched = true;
         self.cleanup_note = None;
+        let before = self.snapshot();
         if let Some(edit) = &mut self.edit {
             edit.reset();
         }
         self.selected = None;
+        self.record(before);
+        cx.notify();
+    }
+
+    fn snapshot(&self) -> Option<Snapshot> {
+        Some(Snapshot {
+            edit: self.edit.clone()?,
+            selected: self.selected,
+        })
+    }
+
+    /// Makes `before` the state ⌘Z returns to, if the edit has changed since. A new change
+    /// drops whatever ⇧⌘Z would have redone.
+    fn record(&mut self, before: Option<Snapshot>) {
+        let Some(before) = before else { return };
+        if self.edit.as_ref() == Some(&before.edit) {
+            return;
+        }
+        if self.undo.len() >= UNDO_LIMIT {
+            self.undo.remove(0);
+        }
+        self.undo.push(before);
+        self.redo.clear();
+    }
+
+    /// ⌘Z, or ⇧⌘Z when `redo`.
+    fn undo(&mut self, redo: bool, cx: &mut Context<Self>) {
+        if self.drag.is_some() {
+            return;
+        }
+        let Some(edit) = &mut self.edit else { return };
+        let (from, to) = if redo {
+            (&mut self.redo, &mut self.undo)
+        } else {
+            (&mut self.undo, &mut self.redo)
+        };
+        let Some(snapshot) = from.pop() else { return };
+        to.push(Snapshot {
+            edit: std::mem::replace(edit, snapshot.edit),
+            selected: std::mem::replace(&mut self.selected, snapshot.selected),
+        });
+        // Undoing automatic clean up mustn't let it run again.
+        self.touched = true;
+        self.cleanup_note = None;
         cx.notify();
     }
 
@@ -419,8 +486,13 @@ impl Editor {
 
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let keystroke = &event.keystroke;
-        if keystroke.modifiers.platform && keystroke.key == "s" {
-            self.save(window, cx);
+        // ⌘ chords never fall through to the single-letter tools below (⌘C isn't Clean up).
+        if keystroke.modifiers.platform {
+            match keystroke.key.as_str() {
+                "s" => self.save(window, cx),
+                "z" => self.undo(keystroke.modifiers.shift, cx),
+                _ => {}
+            }
             return;
         }
         let step = if keystroke.modifiers.shift { 5. } else { 1. };
@@ -433,6 +505,7 @@ impl Editor {
             "i" | "o" => {
                 self.touched = true;
                 let t = self.playhead;
+                let before = self.snapshot();
                 if let Some(edit) = &mut self.edit {
                     let i = edit.clip_at(t);
                     if keystroke.key == "i" {
@@ -442,6 +515,7 @@ impl Editor {
                     }
                     self.selected = Some(i);
                 }
+                self.record(before);
                 cx.notify();
             }
             "left" | "right" => {
@@ -501,6 +575,7 @@ impl Editor {
             .handle_at(f32::from(event.position.x))
             .unwrap_or(Drag::Scrub);
         if let Drag::Start(i) | Drag::End(i) = drag {
+            self.drag_before = self.snapshot();
             self.selected = Some(i);
             self.touched = true;
         }
@@ -554,6 +629,8 @@ impl Editor {
 
     fn end_drag(&mut self) {
         self.drag = None;
+        let before = self.drag_before.take();
+        self.record(before);
         // Land on the exact frame once the pointer lets go.
         self.player.seek(self.playhead, true);
     }
