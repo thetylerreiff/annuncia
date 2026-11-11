@@ -18,6 +18,7 @@
   --gut: clamp(16px, 4vw, 48px);
   --r: 10px;
   --ease: cubic-bezier(.2, .8, .2, 1);
+  --notch-h: 34px;
   --face: url("/images/gabriel.png") 51% 30% / 330% auto no-repeat, #0d0d24;
   --font: "Schibsted Grotesk", ui-sans-serif, system-ui, -apple-system, sans-serif;
   color-scheme: dark;
@@ -72,31 +73,59 @@ img, canvas, svg { display: block; }
   font-size: 15px; font-weight: 500;
   transition: opacity .3s, transform .4s var(--ease);
 }
+/* Once the art has gone into the notch, page content scrolls under the nav: give it black glass to
+   sit on, with a hairline at its foot. The notch hangs from the top centre of the same band. */
 .nav::before {
-  content: ""; position: absolute; inset: 0 0 -24px 0; z-index: -1; pointer-events: none;
-  background: linear-gradient(180deg, rgba(0, 0, 0, .78), rgba(0, 0, 0, 0));
+  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  background: rgba(4, 4, 10, .8);
+  backdrop-filter: blur(16px) saturate(1.2); -webkit-backdrop-filter: blur(16px) saturate(1.2);
+  box-shadow: 0 1px 0 var(--line);
   opacity: 0; transition: opacity .4s;
 }
-body.in-body .nav::before { opacity: 1; }
+body.nav-solid .nav::before { opacity: 1; }
+body.stop-on .nav { opacity: 0; transform: translateY(-100%); visibility: hidden; pointer-events: none; transition: opacity .3s, transform .4s var(--ease), visibility 0s .4s; }
 .brand { display: inline-flex; align-items: center; gap: 10px; font-weight: 600; letter-spacing: -.02em; font-size: 17px; }
 .brand img { border-radius: 6px; }
 .nav nav { display: flex; align-items: center; gap: 26px; padding: 4px 4px 4px 18px; border-radius: 12px; background: rgba(13, 13, 36, .5); backdrop-filter: blur(12px) saturate(1.2); -webkit-backdrop-filter: blur(12px) saturate(1.2); box-shadow: inset 0 0 0 1px rgba(212, 212, 242, .08); }
-body.in-body .nav nav { background: rgba(0, 0, 0, .55); }
+body.nav-solid .nav nav { padding: 0; background: none; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
 .nl { color: rgba(242, 242, 245, .86); transition: color .2s, opacity .3s; text-shadow: 0 0 14px rgba(13, 13, 36, .9), 0 0 3px rgba(13, 13, 36, .9); }
 .nl:hover { color: #fff; }
 .nav-dl { height: 36px; padding: 0 14px; border-radius: 8px; display: inline-flex; align-items: center; box-shadow: inset 0 0 0 1px rgba(212, 212, 242, .3); }
 .nav-dl:hover { box-shadow: inset 0 0 0 1px rgba(212, 212, 242, .7); }
+/* The compact menu: the links that don't fit, in a small sheet under the button. */
+.nav-menu { display: none; width: 40px; height: 36px; place-items: center; border-radius: 8px; box-shadow: inset 0 0 0 1px rgba(212, 212, 242, .3); }
+.nav-menu:hover { box-shadow: inset 0 0 0 1px rgba(212, 212, 242, .7); }
+.nav-menu svg { width: 18px; height: 18px; }
+.nav-menu .m-shut, .nav-menu[aria-expanded="true"] .m-open { display: none; }
+.nav-menu[aria-expanded="true"] .m-shut { display: block; }
+.nav-sheet {
+  position: absolute; top: calc(100% - 8px); right: var(--gut); width: min(260px, calc(100vw - var(--gut) * 2));
+  display: grid; gap: 2px; padding: 6px; border-radius: 14px;
+  background: rgba(10, 10, 12, .94); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 0 0 1px var(--line2), 0 30px 60px -20px rgba(0, 0, 0, .8);
+  animation: sheetIn .22s var(--ease);
+}
+.nav-sheet[hidden] { display: none; }
+.nav-sheet a { height: 46px; padding: 0 12px; border-radius: 9px; display: flex; align-items: center; font-size: 16px; font-weight: 500; }
+.nav-sheet a:hover { background: rgba(255, 255, 255, .06); }
+@keyframes sheetIn { from { opacity: 0; transform: translateY(-6px); } }
 /* While the notch is out, the middle of the top edge belongs to it. */
 @media (max-width: 1100px) {
   body.rec-on .nl { display: none; }
-  body.rec-on .nav nav { padding: 0; background: none; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
+  body.rec-on .nav nav { padding: 0; gap: 10px; background: none; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
+  body.rec-on .nav-menu { display: grid; }
 }
 @media (max-width: 760px) {
   .nl { display: none; }
-  .nav nav { padding: 0; background: none; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
+  .nav nav { padding: 0; gap: 10px; background: none; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
+  .nav-menu { display: grid; background: rgba(13, 13, 36, .55); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
   .nav-dl { background: rgba(13, 13, 36, .55); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
   .brand span { text-shadow: 0 0 12px rgba(13, 13, 36, .9); }
-  body.rec-on .nav { opacity: 0; transform: translateY(-100%); pointer-events: none; }
+  /* The notch fills the top edge here, so the nav stays out of its way: it comes back, under the
+     notch, when you scroll up (or while the menu is open). */
+  body.rec-on .nav { height: 56px; opacity: 0; transform: translateY(-100%); visibility: hidden; pointer-events: none; }
+  body.rec-on:not(.stop-on).nav-peek .nav, body.rec-on:not(.stop-on) .nav.menu-open { opacity: 1; transform: translateY(var(--notch-h)); visibility: visible; pointer-events: auto; }
+  body.rec-on:not(.stop-on).nav-peek .nav::before, body.rec-on:not(.stop-on) .nav.menu-open::before { top: calc(var(--notch-h) * -1); opacity: 1; }
 }
 
 /* ---------- The notch (fixed) ---------- */
@@ -148,6 +177,7 @@ body.in-body .nav nav { background: rgba(0, 0, 0, .55); }
 .notch.wings-open:focus-within { --wing: 140px; }
 
 @media (max-width: 600px) {
+  :root { --notch-h: 32px; }
   .notch { --cam: 116px; --wing: 82px; --h: 32px; font-size: 12.5px; }
   .notch.wings-open:hover, .notch.wings-open:focus-within { --wing: 106px; }
   .wing { gap: 6px; }
@@ -191,7 +221,12 @@ body.in-body .nav nav { background: rgba(0, 0, 0, .55); }
 .ov-def { font-size: 14.5px; line-height: 1.55; color: rgba(212, 212, 242, .82); max-width: 38ch; text-wrap: pretty; }
 .def-w { color: var(--silver); font-weight: 600; font-size: 15.5px; letter-spacing: -.01em; }
 .def-p { color: var(--silver); }
-.ov-cta { display: flex; gap: 10px; }
+.ov-cta { display: flex; flex-wrap: wrap; gap: 10px; }
+/* A phone can't use a disk image: offer to send the link to a Mac instead. */
+.ov-phone { display: none; flex-basis: 100%; }
+.ov-phone button { font-size: 14px; color: var(--soft); text-decoration: underline; text-decoration-color: rgba(212, 212, 242, .35); text-underline-offset: 3px; text-align: left; }
+.ov-phone button:hover { color: var(--text); text-decoration-color: var(--blue); }
+@media (max-width: 760px) and (pointer: coarse) { .ov-phone { display: block; } }
 .wordmark {
   font-family: var(--display);
   font-size: 22vw; /* refined by JS to fit the line exactly */
@@ -372,21 +407,48 @@ h3 + .body { margin-top: 12px; }
 [aria-pressed="true"] > .sw::after { transform: translateX(12px); }
 .tog[aria-pressed="true"] { color: var(--text); }
 
-.rec-more { display: grid; grid-template-columns: 1fr 1fr minmax(260px, 300px); gap: clamp(28px, 4vw, 64px); margin-top: clamp(64px, 7vw, 110px); align-items: start; }
+.rec-more { display: grid; grid-template-columns: 1fr 1fr 320px; gap: clamp(28px, 4vw, 64px); margin-top: clamp(64px, 7vw, 110px); align-items: start; }
 .rec-more .body { font-size: 16.5px; }
-.popover { border-radius: 14px; padding: 8px; background: rgba(10, 10, 12, .9); box-shadow: 0 0 0 1px var(--line2), 0 30px 80px -20px rgba(0, 0, 0, .8); display: grid; gap: 2px; }
-.po-seg { display: grid; grid-template-columns: 1fr 1fr; padding: 3px; border-radius: 9px; background: rgba(255, 255, 255, .05); margin-bottom: 6px; }
-.po-seg button { height: 32px; border-radius: 7px; font-size: 14px; font-weight: 600; color: var(--soft); }
-.po-seg button[aria-checked="true"] { background: var(--blue); color: #fff; }
-.po-row { display: flex; align-items: center; justify-content: space-between; height: 40px; padding: 0 8px; border-radius: 7px; font-size: 14.5px; font-weight: 500; text-align: left; }
-.po-row:hover { background: rgba(255, 255, 255, .05); }
-.po-go { margin-top: 6px; height: 40px; border-radius: 8px; display: flex; align-items: center; justify-content: center; gap: 9px; font-size: 14.5px; font-weight: 600; background: rgba(255, 255, 255, .08); }
-.po-go:hover { background: rgba(255, 255, 255, .13); }
+/* The menu bar panel, as src/ui/launcher.rs draws it: Control Center tiles on black glass. */
+.popover { width: 320px; max-width: 100%; border-radius: 18px; padding: 12px; background: rgba(10, 10, 12, .92); box-shadow: 0 0 0 1px var(--line2), 0 30px 80px -20px rgba(0, 0, 0, .8); display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.pn-sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+.ic { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.pn-tile { display: flex; align-items: center; border-radius: 14px; background: rgba(255, 255, 255, .075); text-align: left; }
+button.pn-tile:hover { background: rgba(255, 255, 255, .12); }
+.pn-modes { display: flex; gap: 8px; }
+.pn-mode { flex: 1; min-width: 0; flex-direction: column; align-items: flex-start; gap: 8px; padding: 10px; }
+.pn-txt { display: block; min-width: 0; width: 100%; }
+.pn-txt b { display: block; font-weight: 500; font-size: 13px; line-height: 1.3; }
+.pn-txt small { display: block; font-size: 11.5px; line-height: 1.3; color: rgba(255, 255, 255, .48); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The round icon leading each tile: filled with the accent while it's on. */
+.pn-ic { width: 28px; height: 28px; flex: none; border-radius: 50%; display: grid; place-items: center; background: rgba(255, 255, 255, .14); color: rgba(242, 242, 245, .95); transition: background .2s; }
+.pn-ic .ic { width: 15px; height: 15px; }
+[aria-checked="true"] > .pn-ic, [aria-pressed="true"] > .pn-ic, .pn-ic[aria-pressed="true"] { background: var(--blue); color: #fff; }
+.pn-tog { margin-left: 10px; }
+.pn-tog:hover { opacity: .85; }
+.pn-pick { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 9px 10px 9px 10px; border-radius: 14px; text-align: left; }
+.pn-chev { width: 14px; height: 14px; flex: none; color: rgba(255, 255, 255, .48); }
+.pn-pick[aria-expanded="true"] .pn-chev { transform: rotate(90deg); }
+.pn-opts { margin-top: 8px; display: flex; flex-direction: column; gap: 1px; padding: 4px; border-radius: 14px; background: rgba(255, 255, 255, .075); }
+.pn-opts[hidden] { display: none; }
+.pn-opts button { display: flex; justify-content: space-between; padding: 6px 10px; border-radius: 10px; font-size: 12.5px; text-align: left; }
+.pn-opts button:hover { background: rgba(255, 255, 255, .12); }
+.pn-opts button[aria-checked="true"]::after { content: "✓"; color: #7a7aff; }
+.pn-row { display: flex; gap: 8px; }
+.pn-sys { flex: 1; min-width: 0; height: 48px; padding: 0 10px; gap: 9px; font-weight: 500; white-space: nowrap; }
+.pn-rec { flex: 1; min-width: 0; height: 48px; border-radius: 14px; display: flex; align-items: center; justify-content: center; gap: 7px; background: var(--red); color: #fff; font-weight: 600; transition: opacity .2s; }
+.pn-rec:hover { opacity: .9; }
+.pn-dot { width: 10px; height: 10px; border-radius: 50%; background: #fff; }
+.pn-rec kbd { font: inherit; font-size: 11px; font-weight: 400; padding: 1px 5px; border-radius: 4px; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .34); color: rgba(255, 255, 255, .85); }
+.pn-foot { display: flex; align-items: center; gap: 2px; padding-left: 4px; font-size: 11.5px; color: rgba(255, 255, 255, .48); }
+.pn-foot > span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pn-fi { width: 26px; height: 26px; display: grid; place-items: center; }
+.pn-fi .ic { width: 15px; height: 15px; }
 
 @media (max-width: 1020px) {
   .rec-head { grid-template-columns: minmax(0, 1fr); }
   .rec-more { grid-template-columns: 1fr 1fr; }
-  .popover { grid-column: 1 / -1; max-width: 320px; }
+  .popover { grid-column: 1 / -1; }
 }
 @media (max-width: 640px) {
   .an-notch { --s: .92; }
@@ -710,7 +772,9 @@ h3 + .body { margin-top: 12px; }
   html { scroll-behavior: auto; }
   .reveal { opacity: 1; transform: none; transition: none; }
   .notch .rdot, .an-notch .rdot { animation: none; }
-  .seg-el, .wing, .bubble, .dw-chart i { transition: none; }
+  .nav, .nav::before { transition: none; }
+  .nav-sheet { animation: none; }
+  .seg-el, .wing, .bubble, .dw-chart i, .pn-ic, .pn-rec { transition: none; }
   .chip { animation: none; }
   .kw { transition: none; }
 }

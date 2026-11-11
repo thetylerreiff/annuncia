@@ -22,9 +22,7 @@
 <meta name="twitter:image" content="https://annuncia.thetylerreiff.co/images/og.png">
 <meta name="twitter:image:alt" content="Annuncia: the screen recorder in your Mac's notch. A dithered archangel Gabriel beside the wordmark and a recording timer.">
 <link rel="icon" type="image/png" href="/images/icon.png">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400..700&display=swap">
+<link rel="preload" href="/fonts/SchibstedGrotesk-Variable.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/GeistSerif-Regular.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/src/style.css">
 </head>
@@ -39,7 +37,14 @@
     <a class="nl" href="/why.html">Why Annuncia</a>
     <a class="nl" href="https://github.com/thetylerreiff/annuncia">GitHub</a>
     <a class="nav-dl" href="/download.html">Download</a>
+    <button class="nav-menu" id="navMenu" type="button" aria-expanded="false" aria-controls="navSheet" aria-label="Menu"><svg viewBox="0 0 16 16" aria-hidden="true"><path class="m-open" d="M2.5 5h11M2.5 11h11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path class="m-shut" d="M4 4l8 8m0-8l-8 8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button>
   </nav>
+  <div class="nav-sheet" id="navSheet" hidden>
+    <a href="#record">Features</a>
+    <a href="#cloud">Cloud</a>
+    <a href="/why.html">Why Annuncia</a>
+    <a href="https://github.com/thetylerreiff/annuncia">GitHub</a>
+  </div>
 </header>
 
 <!-- The page's own recording: hangs from the top edge of the viewport once the art has gone into the notch. -->
@@ -70,6 +75,7 @@
         <div class="ov-cta">
           <a class="btn btn-blue" href="/download.html"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5v8m0 0L4.8 7.3M8 10.5l3.2-3.2M3 13.5h10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>Download for Mac</a>
           <a class="btn btn-line" href="https://github.com/thetylerreiff/annuncia">View source</a>
+          <p class="ov-phone"><button type="button" id="phoneCopy">On your phone? Copy the link to open on your Mac</button><span class="sr" id="phoneSay" role="status" aria-live="polite"></span></p>
         </div>
       </div>
       <h1 class="wordmark" id="wordmark">Annuncia</h1>
@@ -168,15 +174,46 @@
       <h3>Lives in the menu bar.</h3>
       <p class="body">Record the full screen or a single window. Your microphone carries the voiceover, and system audio comes along if you want it. Global shortcuts start and stop, pause, cancel, and toggle the camera.</p>
     </div>
-    <div class="popover reveal" aria-label="Menu bar options, simulated" role="group">
-      <div class="po-seg" role="radiogroup" aria-label="What to record">
-        <button type="button" role="radio" aria-checked="true">Full screen</button>
-        <button type="button" role="radio" aria-checked="false">Window</button>
+    <div class="popover reveal" aria-label="Menu bar panel, simulated" role="group">
+      <svg class="pn-sprite" aria-hidden="true" focusable="false">
+        <symbol id="i-display" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M12 16v4M8.5 20h7"/></symbol>
+        <symbol id="i-window" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 9h18"/></symbol>
+        <symbol id="i-camera" viewBox="0 0 24 24"><rect x="3" y="6.5" width="12" height="11" rx="2.5"/><path d="M15 10.5 20.5 7.5v9L15 13.5"/></symbol>
+        <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21"/></symbol>
+        <symbol id="i-speaker" viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/></symbol>
+        <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m10 6 6 6-6 6"/></symbol>
+        <symbol id="i-library" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="7" height="6.5" rx="1.5"/><rect x="13.5" y="4.5" width="7" height="6.5" rx="1.5"/><rect x="3.5" y="13" width="7" height="6.5" rx="1.5"/><rect x="13.5" y="13" width="7" height="6.5" rx="1.5"/></symbol>
+        <symbol id="i-gear" viewBox="0 0 24 24"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></symbol>
+      </svg>
+      <div class="pn-modes" role="radiogroup" aria-label="What to record">
+        <button type="button" class="pn-tile pn-mode" role="radio" aria-checked="true"><span class="pn-ic"><svg class="ic" aria-hidden="true"><use href="#i-display"/></svg></span><span class="pn-txt"><b>Full screen</b><small>Main display</small></span></button>
+        <button type="button" class="pn-tile pn-mode" role="radio" aria-checked="false" tabindex="-1"><span class="pn-ic"><svg class="ic" aria-hidden="true"><use href="#i-window"/></svg></span><span class="pn-txt"><b>Window</b><small>Pick a window</small></span></button>
       </div>
-      <button type="button" class="po-row" aria-pressed="true"><span>Microphone</span><span class="sw" aria-hidden="true"></span></button>
-      <button type="button" class="po-row" aria-pressed="false"><span>System audio</span><span class="sw" aria-hidden="true"></span></button>
-      <button type="button" class="po-row" aria-pressed="true"><span>Camera</span><span class="sw" aria-hidden="true"></span></button>
-      <a class="po-go" href="#top"><span class="rdot" aria-hidden="true"></span>Start recording</a>
+      <div class="pn-dev">
+        <div class="pn-tile">
+          <button type="button" class="pn-ic pn-tog" aria-pressed="true" aria-label="Camera"><svg class="ic" aria-hidden="true"><use href="#i-camera"/></svg></button>
+          <button type="button" class="pn-pick" aria-expanded="false" aria-controls="pickCam"><span class="pn-txt"><b>Camera</b><small>MacBook Pro Camera</small></span><svg class="ic pn-chev" aria-hidden="true"><use href="#i-chevron"/></svg></button>
+        </div>
+        <div class="pn-opts" id="pickCam" role="radiogroup" aria-label="Camera" hidden>
+          <button type="button" role="radio" aria-checked="true">MacBook Pro Camera</button>
+          <button type="button" role="radio" aria-checked="false">Studio Display Camera</button>
+        </div>
+      </div>
+      <div class="pn-dev">
+        <div class="pn-tile">
+          <button type="button" class="pn-ic pn-tog" aria-pressed="true" aria-label="Microphone"><svg class="ic" aria-hidden="true"><use href="#i-mic"/></svg></button>
+          <button type="button" class="pn-pick" aria-expanded="false" aria-controls="pickMic"><span class="pn-txt"><b>Microphone</b><small>MacBook Pro Microphone</small></span><svg class="ic pn-chev" aria-hidden="true"><use href="#i-chevron"/></svg></button>
+        </div>
+        <div class="pn-opts" id="pickMic" role="radiogroup" aria-label="Microphone" hidden>
+          <button type="button" role="radio" aria-checked="true">MacBook Pro Microphone</button>
+          <button type="button" role="radio" aria-checked="false">AirPods Pro</button>
+        </div>
+      </div>
+      <div class="pn-row">
+        <button type="button" class="pn-tile pn-sys" aria-pressed="false"><span class="pn-ic"><svg class="ic" aria-hidden="true"><use href="#i-speaker"/></svg></span><span>System audio</span></button>
+        <a class="pn-rec" href="#top"><span class="pn-dot" aria-hidden="true"></span>Record<kbd>⌥⇧R</kbd></a>
+      </div>
+      <div class="pn-foot"><span>Saves to ~/Documents/Annuncia</span><span class="pn-fi" aria-hidden="true"><svg class="ic"><use href="#i-library"/></svg></span><span class="pn-fi" aria-hidden="true"><svg class="ic"><use href="#i-gear"/></svg></span></div>
     </div>
   </div>
 </section>

@@ -381,7 +381,11 @@ function update() {
   notch.classList.toggle('wings-open', nw > .98);
   notch.classList.toggle('hand-off', handOff);
   document.body.classList.toggle('rec-on', nd > .2 && !past);
-  document.body.classList.toggle('in-body', p > .5 || r.bottom < 0);
+  // While the stop scene is pinned its panel fills the top edge, so the nav steps out of the way;
+  // otherwise it gets its backing as page content nears it.
+  const stopOn = sr.top <= 0 && sr.bottom > 160;
+  document.body.classList.toggle('stop-on', stopOn);
+  document.body.classList.toggle('nav-solid', r.bottom < 160 && !stopOn);
 
   // The notch comes down
   drop.classList.toggle('on', pinned || stopStatic);
@@ -673,10 +677,52 @@ const bubble = (() => {
   return { ready: () => { bmp = null; draw(); } };
 })();
 
-/* Menu bar popover toggles */
-$$('.popover .po-row').forEach((b) => b.addEventListener('click', () => b.setAttribute('aria-pressed', String(b.getAttribute('aria-pressed') !== 'true'))));
-$$('.po-seg button').forEach((b) => b.addEventListener('click', () => $$('.po-seg button').forEach((o) => o.setAttribute('aria-checked', String(o === b)))));
-$('.po-go').addEventListener('click', (e) => {
+/* Menu bar panel: tiles toggle, the mode is a radio group, the device rows open their lists */
+(() => {
+  const panel = $('.popover');
+  const flip = (b) => b.setAttribute('aria-pressed', String(b.getAttribute('aria-pressed') !== 'true'));
+  $$('.pn-tog, .pn-sys', panel).forEach((b) => b.addEventListener('click', () => flip(b)));
+
+  const modes = $$('.pn-mode', panel);
+  const pick = (b, focus) => modes.forEach((o) => {
+    o.setAttribute('aria-checked', String(o === b));
+    o.tabIndex = o === b ? 0 : -1;
+    if (o === b && focus) o.focus();
+  });
+  modes.forEach((b, i) => {
+    b.addEventListener('click', () => pick(b));
+    b.addEventListener('keydown', (e) => {
+      const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+      if (!step) return;
+      e.preventDefault();
+      pick(modes[(i + step + modes.length) % modes.length], true);
+    });
+  });
+
+  $$('.pn-pick', panel).forEach((b) => {
+    const list = document.getElementById(b.getAttribute('aria-controls'));
+    const name = $('small', b);
+    b.addEventListener('click', () => {
+      const open = b.getAttribute('aria-expanded') !== 'true';
+      b.setAttribute('aria-expanded', String(open));
+      list.hidden = !open;
+    });
+    $$('button', list).forEach((o) => o.addEventListener('click', () => {
+      $$('button', list).forEach((x) => x.setAttribute('aria-checked', String(x === o)));
+      name.textContent = o.textContent;
+      b.setAttribute('aria-expanded', 'false');
+      list.hidden = true;
+      b.focus();
+    }));
+    list.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      b.setAttribute('aria-expanded', 'false');
+      list.hidden = true;
+      b.focus();
+    });
+  });
+})();
+$('.pn-rec').addEventListener('click', (e) => {
   // Back to the top: the take starts when the art goes into the notch.
   if (reduced) return;
   e.preventDefault();
@@ -1144,4 +1190,61 @@ $$('.dpa[data-say]').forEach((b) => b.addEventListener('click', () => {
     };
     setTimeout(step, 700);
   }, { threshold: .45 }).observe($('#lib'));
+})();
+
+/* ------------------------------------------------------------------ */
+/* Nav menu, and the link for people on a phone                        */
+/* ------------------------------------------------------------------ */
+
+(() => {
+  const nav = $('#nav'), btn = $('#navMenu'), sheet = $('#navSheet');
+  const set = (open) => {
+    btn.setAttribute('aria-expanded', String(open));
+    sheet.hidden = !open;
+    nav.classList.toggle('menu-open', open);
+  };
+  const close = (refocus) => { if (sheet.hidden) return; set(false); if (refocus) btn.focus(); };
+  btn.addEventListener('click', () => set(sheet.hidden));
+  sheet.addEventListener('click', (e) => { if (e.target.closest('a')) close(false); });
+  nav.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !sheet.hidden) { e.preventDefault(); close(true); } });
+  // Tabbing out of the menu, or tapping elsewhere, closes it without stealing focus back.
+  nav.addEventListener('focusout', (e) => { if (e.relatedTarget && !nav.contains(e.relatedTarget)) close(false); });
+  document.addEventListener('pointerdown', (e) => { if (!nav.contains(e.target)) close(false); });
+
+  // The button only exists below the breakpoint (and while the notch is out); if it goes, so does the sheet.
+  const gone = () => { if (!sheet.hidden && (getComputedStyle(btn).display === 'none' || document.body.classList.contains('stop-on'))) close(false); };
+  addEventListener('resize', gone);
+
+  // On a phone the notch takes the top edge, so the nav hides while it's out and comes back under it
+  // when you scroll up.
+  let lastY = scrollY;
+  addEventListener('scroll', () => {
+    const y = scrollY, d = y - lastY;
+    if (Math.abs(d) < 6) return;
+    lastY = y;
+    document.body.classList.toggle('nav-peek', d < 0);
+    if (d > 0) close(false);
+    gone();
+  }, { passive: true });
+
+  // "On your phone?": copy the download page's address so it can be opened on a Mac.
+  const copy = $('#phoneCopy'), say = $('#phoneSay');
+  const label = copy.textContent;
+  copy.addEventListener('click', async () => {
+    const url = new URL('/download.html', location.href).href;
+    let ok = false;
+    try { await navigator.clipboard.writeText(url); ok = true; } catch {
+      // No async clipboard (an insecure origin, say): fall back to selecting and copying.
+      const t = document.createElement('textarea');
+      t.value = url; t.setAttribute('readonly', ''); t.style.cssText = 'position:fixed;top:0;opacity:0';
+      document.body.appendChild(t); t.select();
+      try { ok = document.execCommand('copy'); } catch { /* reported below */ }
+      t.remove();
+    }
+    const msg = ok ? 'Link copied. Open it on your Mac.' : `Couldn’t copy. The link is ${url}`;
+    say.textContent = msg;
+    copy.textContent = msg;
+    clearTimeout(copy._t);
+    copy._t = setTimeout(() => { copy.textContent = label; say.textContent = ''; }, 3200);
+  });
 })();

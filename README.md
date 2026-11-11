@@ -95,13 +95,17 @@ The Nightly workflow builds `main` every night it has changed (or whenever you r
 
 ### Permissions
 
-macOS asks for these the first time each one is needed:
+Annuncia uses three macOS permissions:
 
 | Permission | Needed for |
 | --- | --- |
 | Screen & System Audio Recording | Every recording. macOS may ask you to quit and reopen Annuncia after granting it. |
 | Camera | The camera bubble |
 | Microphone | Voiceover |
+
+#### First launch
+
+The first time you open Annuncia, a setup window asks for these in turn: Screen Recording first (required, and Continue stays off until it's granted), then the microphone and camera (optional). It then offers to download a transcription model (English, other languages, or not now) and ends by pointing out the menu bar icon, with your shortcuts and an Open at login switch. Done opens the recorder panel under the icon. A microphone or camera you allow during setup is switched on for you.
 
 ## Using it
 
@@ -111,7 +115,7 @@ macOS asks for these the first time each one is needed:
 2. Choose **Full screen** or **Window**. Click the round icon on the Camera or Microphone tile to switch it on or off, or the rest of the tile to pick a device. The System audio tile adds the sound your Mac is playing.
 3. Press **Record** (or <kbd>Return</kbd>). A short countdown plays in the notch, then recording begins.
 4. Pause and resume as often as you like; the timer counts only what's recorded, and the parts are joined into one file without re-encoding.
-5. Stop from the notch or with the shortcut. The file is saved, and the notch offers Show in Finder, Copy and Open.
+5. Stop from the notch or with the shortcut. The file is saved, and the notch drops down with **Copy** (the file itself), **Copy transcript** (when transcription is on), **Edit** and **Open**, and a folder button that shows the file in Finder. The editor opens too, unless you've turned that off.
 
 Hover the notch while recording for **Restart** (click twice to confirm) and **Discard**. Both move what you've recorded to the Trash. Nothing is permanently deleted.
 
