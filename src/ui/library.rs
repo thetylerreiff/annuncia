@@ -983,6 +983,16 @@ impl LibraryView {
                 match result {
                     Ok(to) => {
                         this.error = None;
+                        // The selection follows the file to its new name.
+                        for p in this
+                            .selection
+                            .iter_mut()
+                            .chain(this.anchor.as_mut())
+                            .chain(this.cursor.as_mut())
+                            .filter(|p| **p == path)
+                        {
+                            *p = to.clone();
+                        }
                         if let Some(detail) = this.detail.as_mut().filter(|d| d.path == path) {
                             detail.path = to;
                             detail.error = None;
