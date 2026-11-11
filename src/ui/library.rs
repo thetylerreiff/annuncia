@@ -31,7 +31,7 @@ use crate::transcript::{Transcript, timestamp};
 use crate::ui::icons::icon;
 use crate::ui::settings_view::{self, SettingsView};
 use crate::ui::transcript_view::{self, dithered_note, paragraph_of};
-use crate::ui::{Theme, button};
+use crate::ui::{Theme, button, tip};
 
 const PADDING: f32 = 24.;
 const GAP: f32 = 16.;
@@ -1262,12 +1262,14 @@ impl LibraryView {
                                 native::reveal_in_finder(&path);
                             })
                     })
-                    .child(more_button(("more", index), theme).on_click(cx.listener(
-                        move |this, event: &ClickEvent, _, cx| {
-                            cx.stop_propagation();
-                            this.open_card_menu(index, event.position(), cx);
-                        },
-                    ))),
+                    .child(
+                        more_button(("more", index), theme)
+                            .tooltip(tip("More"))
+                            .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                                cx.stop_propagation();
+                                this.open_card_menu(index, event.position(), cx);
+                            })),
+                    ),
             );
 
         div()
@@ -1391,21 +1393,23 @@ impl LibraryView {
                         move |this, _, _, cx| this.edit(path.clone(), cx)
                     })))
                     // The rest wait in a menu, so the header fits narrow windows.
-                    .child(header_button("more", "⋯").on_click(cx.listener(
-                        move |this, event: &ClickEvent, _, cx| {
-                            this.menu = Some(Menu {
-                                paths: vec![path.clone()],
-                                at: event.position(),
-                                actions: vec![
-                                    Some(Action::Reveal),
-                                    Some(Action::Rename),
-                                    None,
-                                    Some(Action::Trash),
-                                ],
-                            });
-                            cx.notify();
-                        },
-                    ))),
+                    .child(
+                        header_button("more", "⋯")
+                            .tooltip(tip("More"))
+                            .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                                this.menu = Some(Menu {
+                                    paths: vec![path.clone()],
+                                    at: event.position(),
+                                    actions: vec![
+                                        Some(Action::Reveal),
+                                        Some(Action::Rename),
+                                        None,
+                                        Some(Action::Trash),
+                                    ],
+                                });
+                                cx.notify();
+                            })),
+                    ),
             )
             .into_any_element()
     }
@@ -1545,6 +1549,7 @@ impl LibraryView {
                         theme.text
                     })
                     .hover(|s| s.bg(theme.control_hover))
+                    .tooltip(tip("Playback speed"))
                     .on_click(cx.listener(|this, _, _, cx| this.cycle_speed(cx)))
                     .child(format!("{}x", playback.speed)),
             )
@@ -1564,6 +1569,7 @@ impl LibraryView {
                             .rounded(px(6.))
                             .cursor_pointer()
                             .hover(|s| s.bg(theme.control_hover))
+                            .tooltip(tip(if playback.muted { "Unmute" } else { "Mute" }))
                             .on_click(cx.listener(|this, _, _, cx| this.toggle_mute(cx)))
                             .child(icon(
                                 "speaker",
@@ -1578,6 +1584,7 @@ impl LibraryView {
                     .child(
                         div()
                             .id("volume")
+                            .tooltip(tip("Volume"))
                             .w(px(VOLUME_WIDTH))
                             .h(px(20.))
                             .relative()
