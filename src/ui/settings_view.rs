@@ -175,13 +175,15 @@ impl Render for SettingsView {
                         button("choose-dir", "Choose…", false, theme)
                             .on_click(cx.listener(|this, _, _, cx| this.choose_save_dir(cx))),
                     )
-                    .child(button("reveal-dir", "Show", false, theme).on_click({
-                        let dir = settings.save_dir.clone();
-                        move |_, _, _| {
-                            let _ = std::fs::create_dir_all(&dir);
-                            crate::native::open(&dir);
-                        }
-                    })),
+                    .child(
+                        button("reveal-dir", "Show in Finder", false, theme).on_click({
+                            let dir = settings.save_dir.clone();
+                            move |_, _, _| {
+                                let _ = std::fs::create_dir_all(&dir);
+                                crate::native::open(&dir);
+                            }
+                        }),
+                    ),
                 theme,
             ))
             .child(row(
@@ -207,7 +209,7 @@ impl Render for SettingsView {
             .child(row(
                 "Setup",
                 Some("Permissions, transcription and shortcuts, as on first launch".into()),
-                button("show-setup", "Show…", false, theme).on_click({
+                button("show-setup", "Open Setup…", false, theme).on_click({
                     let state = self.state.clone();
                     move |_, _, cx| state.update(cx, |s, cx| s.open_onboarding(cx))
                 }),
@@ -216,7 +218,7 @@ impl Render for SettingsView {
             .child(row(
                 "Settings file",
                 Some(tilde(&settings::settings_path())),
-                button("open-config", "Show", false, theme).on_click(|_, _, _| {
+                button("open-config", "Show in Finder", false, theme).on_click(|_, _, _| {
                     crate::native::open(settings::config_dir());
                 }),
                 theme,
