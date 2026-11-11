@@ -287,6 +287,9 @@ impl Hud {
                     let _ = this.update(cx, |hud, cx| {
                         hud.hovered = false;
                         hud.pointer_on = None;
+                        // The armed button folds away with the rest, so it shouldn't be armed
+                        // when it comes back.
+                        hud.armed = None;
                         cx.notify();
                     });
                     break;
