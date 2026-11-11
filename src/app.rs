@@ -1575,7 +1575,9 @@ impl Annuncia {
                     // falls back to the avatar or "Camera off".
                     Err(err) => {
                         self.camera_failed = true;
-                        self.post(match plain_sentence(&err) {
+                        // Opening the panel starts the camera, so a Mac without one would keep
+                        // this pinned: it times out, unlike errors about a recording.
+                        let notice = match plain_sentence(&err) {
                             Some(sentence) => Notice::error("Camera unavailable", sentence),
                             None => Notice::error(
                                 "Camera unavailable",
@@ -1583,7 +1585,8 @@ impl Annuncia {
                                  and on again.",
                             )
                             .detail(format!("{err:#}")),
-                        });
+                        };
+                        self.post(notice.timed());
                     }
                 }
             }
@@ -1614,7 +1617,8 @@ impl Annuncia {
                     .action(Some((
                         "Open Settings".into(),
                         Permission::Camera.settings_url(),
-                    ))),
+                    )))
+                    .timed(),
                 );
             }
         }
