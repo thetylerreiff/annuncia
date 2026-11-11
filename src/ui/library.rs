@@ -23,6 +23,7 @@ use objc2::rc::Retained;
 use objc2_app_kit::NSSearchField;
 
 use crate::app::{self, Annuncia, TranscriptState};
+use crate::hotkeys;
 use crate::library::{self, Entry};
 use crate::native;
 use crate::player::Player;
@@ -1503,6 +1504,49 @@ impl LibraryView {
 }
 
 impl LibraryView {
+    /// No recordings yet: how to make one, with the actual shortcut, and a button that does.
+    fn empty_state(&self, theme: Theme, cx: &mut Context<Self>) -> AnyElement {
+        let binding = &self.state.read(cx).settings.hotkeys.toggle_recording;
+        let how = if binding.is_empty() {
+            "Start one from the Annuncia icon in the menu bar.".to_string()
+        } else {
+            format!(
+                "Press {} to start and stop a recording, from any app.",
+                hotkeys::display_binding(binding)
+            )
+        };
+        div()
+            .flex_1()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap(px(12.))
+            .px(px(20.))
+            .child(img("images/icon.png").size(px(64.)).opacity(0.55))
+            .child(
+                div()
+                    .text_size(px(15.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme.text)
+                    .child("No recordings yet"),
+            )
+            .child(
+                div()
+                    .max_w(px(320.))
+                    .text_size(px(12.5))
+                    .text_color(theme.text_muted)
+                    .text_center()
+                    .child(how),
+            )
+            .child(div().pt(px(4.)).child(
+                button("new-recording", "New recording", true, theme).on_click(cx.listener(
+                    |this, _, _, cx| this.state.update(cx, |s, cx| s.toggle_launcher(cx)),
+                )),
+            ))
+            .into_any_element()
+    }
+
     /// "Moved … to the Trash" [Undo], floating at the bottom of the window.
     fn undo_bar(&self, theme: Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
         let undo = self.undo.as_ref()?;
@@ -1925,21 +1969,7 @@ impl Render for LibraryView {
         let body = if !self.query.trim().is_empty() {
             self.results(theme, cx)
         } else if self.items.is_empty() {
-            div()
-                .flex_1()
-                .flex()
-                .flex_col()
-                .items_center()
-                .justify_center()
-                .gap(px(12.))
-                .child(img("images/icon.png").size(px(64.)).opacity(0.55))
-                .child(
-                    div()
-                        .text_size(px(12.5))
-                        .text_color(theme.text_muted)
-                        .child("Recordings you make show up here"),
-                )
-                .into_any_element()
+            self.empty_state(theme, cx)
         } else {
             self.columns = columns;
             // Labels and rows are the scroll view's own children, so the arrow keys can scroll
