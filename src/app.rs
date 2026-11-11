@@ -1712,7 +1712,6 @@ impl Annuncia {
     }
 }
 
-/// Shared options for our borderless overlay windows; the native frame is applied afterwards.
 /// Errors the recorder and camera already word for people, by how they start. They come back as
 /// plain `anyhow` errors, so they're matched by text; keep these in step with `recorder.rs` and
 /// `camera.rs`.
@@ -1732,6 +1731,7 @@ fn plain_sentence(err: &anyhow::Error) -> Option<String> {
         .then_some(message)
 }
 
+/// Shared options for our borderless overlay windows; the native frame is applied afterwards.
 pub fn overlay_options(rect: TopLeftRect, focus: bool) -> WindowOptions {
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds {
