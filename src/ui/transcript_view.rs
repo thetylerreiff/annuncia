@@ -56,7 +56,7 @@ pub fn paragraphs<V: 'static>(
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(theme.text_muted)
                         .cursor_pointer()
-                        .hover(|s| s.text_color(theme.accent))
+                        .hover(|s| s.text_color(theme.accent_soft))
                         .on_click(cx.listener(move |this, _, _, cx| seek(this, start, cx)))
                         .child(timestamp(start)),
                 )
