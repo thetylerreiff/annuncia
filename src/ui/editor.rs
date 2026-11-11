@@ -15,9 +15,9 @@ use gpui::{
     AnyElement, App, AppContext as _, Bounds, Context, Entity, FocusHandle, Focusable, FontWeight,
     InteractiveElement as _, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
     MouseMoveEvent, MouseUpEvent, ObjectFit, ParentElement as _, Pixels, Render, ScrollHandle,
-    SharedString, StatefulInteractiveElement as _, Styled as _, TitlebarOptions, Window,
-    WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowOptions, canvas, div, hsla,
-    prelude::FluentBuilder as _, px, relative, size, surface,
+    ScrollWheelEvent, SharedString, StatefulInteractiveElement as _, Styled as _, TitlebarOptions,
+    Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowOptions, canvas, div,
+    hsla, prelude::FluentBuilder as _, px, relative, size, surface,
 };
 use objc2::MainThreadMarker;
 
@@ -34,8 +34,19 @@ use crate::ui::icons::icon;
 use crate::ui::transcript_view::{self, dithered_note, paragraph_of};
 use crate::ui::{Theme, button, keycap};
 
-/// Waveform bars across the timeline.
+/// Waveform bars across the timeline's view.
 const BARS: usize = 220;
+/// Waveform resolution, read once from the audio: enough for the timeline fully zoomed in.
+const PEAKS_PER_SECOND: usize = 50;
+/// Fully zoomed in, a second of the recording is this wide (in points), so even a short pause
+/// is easy to grab.
+const MAX_SECOND_WIDTH: f64 = 50.;
+/// Spacings for the ruler's time labels, in seconds; it takes the first that isn't crowded.
+const RULER_STEPS: [f64; 13] = [
+    1., 2., 5., 10., 15., 30., 60., 120., 300., 600., 900., 1800., 3600.,
+];
+/// Narrowest gap (in points) between ruler labels.
+const RULER_SPACING: f64 = 72.;
 /// Trim handles sit just inside their clip's kept part, so the two at a split read as `][`.
 const HANDLE_WIDTH: f32 = 12.;
 /// Extra reach (in points) around a handle for grabbing it.
@@ -65,12 +76,16 @@ pub struct Editor {
     player: Player,
     /// `None` until the file's length and waveform have loaded.
     edit: Option<Edit>,
+    /// Peak loudness every 1/`PEAKS_PER_SECOND` seconds.
     waveform: Vec<f32>,
     playhead: f64,
     /// Selected clip.
     selected: Option<usize>,
     drag: Option<Drag>,
     timeline: Rc<Cell<Option<Bounds<Pixels>>>>,
+    /// Timeline zoom: 1 fits the whole recording, more shows less of it (see `view`).
+    zoom: f64,
+    view_start: f64,
     /// Export progress in thousandths while saving.
     saving: Option<Arc<AtomicU32>>,
     error: Option<SharedString>,
@@ -168,7 +183,10 @@ impl Editor {
             let duration = media::duration(&load);
             // One read of the audio feeds both the waveform and the pause map.
             let pcm = media::audio(&load, speech::SAMPLE_RATE as f64).unwrap_or_default();
-            let waveform = media::peaks(&pcm, BARS);
+            let waveform: Vec<f32> = pcm
+                .chunks(speech::SAMPLE_RATE / PEAKS_PER_SECOND)
+                .flat_map(|chunk| media::peaks(chunk, 1))
+                .collect();
             let silences = speech::silences(&pcm, 0.3);
             (duration, waveform, silences)
         });
@@ -212,6 +230,8 @@ impl Editor {
             selected: None,
             drag: None,
             timeline: Rc::new(Cell::new(None)),
+            zoom: 1.,
+            view_start: 0.,
             saving: None,
             error: None,
             copied: false,
@@ -246,6 +266,7 @@ impl Editor {
             }
             if (t - self.playhead).abs() > 1e-3 {
                 self.playhead = t;
+                self.reveal(t);
                 changed = true;
             }
         }
@@ -279,6 +300,7 @@ impl Editor {
 
     fn seek(&mut self, t: f64, exact: bool) {
         self.playhead = t;
+        self.reveal(t);
         self.player.seek(t, exact);
     }
 
@@ -515,6 +537,9 @@ impl Editor {
             match keystroke.key.as_str() {
                 "s" => self.save(window, cx),
                 "z" => self.undo(keystroke.modifiers.shift, cx),
+                "=" | "+" => self.zoom_to(self.zoom * 2., self.playhead, cx),
+                "-" => self.zoom_to(self.zoom / 2., self.playhead, cx),
+                "0" => self.zoom_to(1., self.playhead, cx),
                 _ => {}
             }
             return;
@@ -565,19 +590,109 @@ impl Editor {
         }
     }
 
+    /// The stretch of the recording the timeline shows: all of it at 1x, less zoomed in.
+    fn view(&self) -> Option<Range<f64>> {
+        let duration = self.edit.as_ref()?.duration;
+        let len = duration / self.zoom;
+        let start = self.view_start.clamp(0., duration - len);
+        Some(start..start + len)
+    }
+
+    /// The timeline's width in points, as last drawn.
+    fn timeline_width(&self) -> f64 {
+        self.timeline
+            .get()
+            .map_or(1000., |b| f64::from(f32::from(b.size.width)).max(1.))
+    }
+
+    /// Zooms the timeline, keeping time `anchor` where it is on screen (centring it when it's
+    /// out of view). Fully zoomed in, a second is `MAX_SECOND_WIDTH` wide.
+    fn zoom_to(&mut self, zoom: f64, anchor: f64, cx: &mut Context<Self>) {
+        let (Some(duration), Some(view)) = (self.edit.as_ref().map(|e| e.duration), self.view())
+        else {
+            return;
+        };
+        let max = (MAX_SECOND_WIDTH * duration / self.timeline_width()).max(1.);
+        let zoom = zoom.clamp(1., max);
+        let len = duration / zoom;
+        let fraction = if view.contains(&anchor) {
+            (anchor - view.start) / (view.end - view.start)
+        } else {
+            0.5
+        };
+        self.zoom = zoom;
+        self.view_start = (anchor - fraction * len).clamp(0., duration - len);
+        cx.notify();
+    }
+
+    /// Scrolls the zoomed-in timeline by `by` seconds.
+    fn pan(&mut self, by: f64, cx: &mut Context<Self>) {
+        let (Some(duration), Some(view)) = (self.edit.as_ref().map(|e| e.duration), self.view())
+        else {
+            return;
+        };
+        self.view_start = (view.start + by).clamp(0., duration - (view.end - view.start));
+        cx.notify();
+    }
+
+    /// Brings `t` into the zoomed-in timeline's view when it's outside it: a page ahead (so
+    /// playback is followed a page at a time), or back with room to keep stepping back.
+    fn reveal(&mut self, t: f64) {
+        let (Some(duration), Some(view)) = (self.edit.as_ref().map(|e| e.duration), self.view())
+        else {
+            return;
+        };
+        if (view.start..=view.end).contains(&t) {
+            return;
+        }
+        let len = view.end - view.start;
+        let start = if t < view.start { t - len * 0.75 } else { t };
+        self.view_start = start.clamp(0., duration - len);
+    }
+
+    /// ⌘-scroll zooms around the pointer; scrolling either way pans.
+    fn on_timeline_scroll(
+        &mut self,
+        event: &ScrollWheelEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(view) = self.view() else { return };
+        let delta = event.delta.pixel_delta(px(16.));
+        let (dx, dy) = (f64::from(f32::from(delta.x)), f64::from(f32::from(delta.y)));
+        if event.modifiers.platform {
+            let anchor = self.time_at(event.position.x).unwrap_or(self.playhead);
+            self.zoom_to(self.zoom * (dy / 100.).exp2(), anchor, cx);
+        } else {
+            // A mouse wheel only scrolls vertically, so the larger of the two pans.
+            let by = if dx.abs() >= dy.abs() { dx } else { dy };
+            self.pan(-by / self.timeline_width() * (view.end - view.start), cx);
+        }
+    }
+
     /// Timeline time under a window x position.
     fn time_at(&self, x: Pixels) -> Option<f64> {
         let bounds = self.timeline.get()?;
-        let edit = self.edit.as_ref()?;
+        let view = self.view()?;
         let width = f32::from(bounds.size.width).max(1.);
         let fraction = ((f32::from(x) - f32::from(bounds.origin.x)) / width).clamp(0., 1.);
-        Some(f64::from(fraction) * edit.duration)
+        Some(view.start + f64::from(fraction) * (view.end - view.start))
     }
 
     fn x_of(&self, t: f64) -> Option<f32> {
         let bounds = self.timeline.get()?;
-        let edit = self.edit.as_ref()?;
-        Some(f32::from(bounds.origin.x) + f32::from(bounds.size.width) * (t / edit.duration) as f32)
+        let view = self.view()?;
+        let fraction = (t - view.start) / (view.end - view.start);
+        Some(f32::from(bounds.origin.x) + f32::from(bounds.size.width) * fraction as f32)
+    }
+
+    /// Whether a clip's kept part, from `start` to `end`, is wide enough on screen for both its
+    /// handles. Narrower clips hide theirs, so handles never overlap; zooming in shows them.
+    fn handles_fit(&self, start: f64, end: f64) -> bool {
+        match (self.x_of(start), self.x_of(end)) {
+            (Some(start), Some(end)) => end - start >= 2. * HANDLE_WIDTH,
+            _ => true,
+        }
     }
 
     /// The handle under window x position `x`, if any.
@@ -585,7 +700,7 @@ impl Editor {
         let edit = self.edit.as_ref()?;
         let within = |lo: f32, hi: f32| x >= lo - HANDLE_SLOP && x <= hi + HANDLE_SLOP;
         edit.clips().iter().enumerate().find_map(|(i, clip)| {
-            if clip.removed {
+            if clip.removed || !self.handles_fit(clip.start, clip.end) {
                 return None;
             }
             let start = self.x_of(clip.start)?;
@@ -747,9 +862,11 @@ impl Editor {
                 .child(self.error.clone().unwrap_or("Reading audio…".into()))
                 .into_any_element();
         };
-        let duration = edit.duration;
-        let at = |t: f64| relative((t / duration).clamp(0., 1.) as f32);
-        let span = |a: f64, b: f64| relative(((b - a) / duration).clamp(0., 1.) as f32);
+        // Positions across the view; zoomed in, what's outside it is clipped away below.
+        let view = self.view().unwrap_or(0.0..edit.duration);
+        let length = view.end - view.start;
+        let at = |t: f64| relative(((t - view.start) / length) as f32);
+        let span = |a: f64, b: f64| relative(((b - a) / length) as f32);
         let accent = theme.accent;
         let record = theme.record;
         let dim = theme.window.opacity(0.72);
@@ -763,8 +880,8 @@ impl Editor {
             .items_center()
             .gap(px(1.))
             .children(
-                self.waveform
-                    .iter()
+                visible_peaks(&self.waveform, &view)
+                    .into_iter()
                     .map(|peak| {
                         let height = (peak.clamp(0., 1.).sqrt() * (TIMELINE_HEIGHT - 20.)).max(2.);
                         div()
@@ -857,7 +974,7 @@ impl Editor {
         let handles = edit
             .clips()
             .iter()
-            .filter(|c| !c.removed)
+            .filter(|c| !c.removed && self.handles_fit(c.start, c.end))
             .flat_map(|c| [handle(c.start, false), handle(c.end, true)]);
 
         let playhead = div()
@@ -878,8 +995,9 @@ impl Editor {
                     .bg(record),
             );
 
+        let in_view = (view.start..=view.end).contains(&self.playhead);
         let bounds = self.timeline.clone();
-        div()
+        let timeline = div()
             .id("timeline")
             .relative()
             .h(px(TIMELINE_HEIGHT))
@@ -887,6 +1005,7 @@ impl Editor {
             .mt(px(10.))
             .cursor_pointer()
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_timeline_down))
+            .on_scroll_wheel(cx.listener(Self::on_timeline_scroll))
             .child(
                 div()
                     .absolute()
@@ -896,15 +1015,73 @@ impl Editor {
                     .bg(theme.control)
                     .child(bars),
             )
-            .children(frames)
+            // Clips and handles stop at the timeline's ends when zoomed in. The clipping layer
+            // reaches a little above and below so the handles' overhang still shows.
+            .child(
+                div()
+                    .absolute()
+                    .top(px(-4.))
+                    .bottom(px(-4.))
+                    .left_0()
+                    .right_0()
+                    .overflow_hidden()
+                    .child(
+                        div()
+                            .absolute()
+                            .top(px(4.))
+                            .bottom(px(4.))
+                            .left_0()
+                            .right_0()
+                            .children(frames)
+                            .children(handles),
+                    ),
+            )
             .child(
                 canvas(move |b, _, _| bounds.set(Some(b)), |_, _, _, _| {})
                     .absolute()
                     .inset_0(),
             )
-            .children(handles)
-            .child(playhead)
+            .when(in_view, |d| d.child(playhead));
+
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .child(self.ruler(&view, theme))
+            .child(timeline)
             .into_any_element()
+    }
+
+    /// Time labels above the timeline, as far apart as it takes not to crowd.
+    fn ruler(&self, view: &Range<f64>, theme: Theme) -> impl IntoElement {
+        let length = view.end - view.start;
+        let width = self.timeline_width();
+        let step = RULER_STEPS
+            .into_iter()
+            .find(|step| step / length * width >= RULER_SPACING)
+            .unwrap_or(RULER_STEPS[RULER_STEPS.len() - 1]);
+        let first = (view.start / step).ceil() as u64;
+        let last = (view.end / step).floor() as u64;
+        div()
+            .relative()
+            .h(px(14.))
+            .w_full()
+            .overflow_hidden()
+            .text_size(px(10.))
+            .text_color(theme.text_muted)
+            .children((first..=last).map(|n| {
+                let t = n as f64 * step;
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .left(relative(((t - view.start) / length) as f32))
+                    .pl(px(4.))
+                    .border_l_1()
+                    .border_color(theme.hairline)
+                    .whitespace_nowrap()
+                    .child(timestamp(t))
+            }))
     }
 
     fn toolbar(&self, theme: Theme, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1216,4 +1393,25 @@ fn tool_button(
         .child(icon(name, 14., theme.text))
         .child(label)
         .child(keycap(key, theme.text_muted))
+}
+
+/// The loudest of `peaks` (`PEAKS_PER_SECOND` apart) under each of `BARS` bars across `view`.
+fn visible_peaks(peaks: &[f32], view: &Range<f64>) -> Vec<f32> {
+    if peaks.is_empty() {
+        return Vec::new();
+    }
+    let rate = PEAKS_PER_SECOND as f64;
+    let per_bar = (view.end - view.start) * rate / BARS as f64;
+    let first = view.start * rate;
+    (0..BARS)
+        .map(|bar| {
+            let lo = (first + bar as f64 * per_bar) as usize;
+            let hi = ((first + (bar + 1) as f64 * per_bar) as usize)
+                .max(lo + 1)
+                .min(peaks.len());
+            peaks
+                .get(lo..hi)
+                .map_or(0., |p| p.iter().copied().fold(0., f32::max))
+        })
+        .collect()
 }
