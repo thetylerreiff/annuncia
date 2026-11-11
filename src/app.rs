@@ -155,6 +155,13 @@ impl Notice {
         self.action = action;
         self
     }
+
+    /// Lets an error go away like an info notice does: for problems raised just by opening the
+    /// panel, which would otherwise stay pinned on a Mac that will always have them.
+    pub fn timed(mut self) -> Self {
+        self.until = Some(Instant::now() + Duration::from_secs(10));
+        self
+    }
 }
 
 pub struct Annuncia {
@@ -418,6 +425,8 @@ impl Annuncia {
             Phase::Saved { until, .. } if now >= *until => {
                 self.phase = Phase::Idle;
                 self.sync_windows(cx);
+                // With a notice up the HUD stays, and must drop the saved row.
+                cx.notify();
             }
             _ => {}
         }
@@ -428,6 +437,8 @@ impl Annuncia {
         {
             self.notice = None;
             self.sync_windows(cx);
+            // Outside a recording or countdown nothing else redraws the HUD.
+            cx.notify();
         }
     }
 
@@ -561,6 +572,8 @@ impl Annuncia {
                             "Open Settings".into(),
                             Permission::Screen.settings_url(),
                         )))
+                    } else if let Some(sentence) = plain_sentence(&err) {
+                        Notice::error("Couldn't start recording", sentence)
                     } else {
                         Notice::error(
                             "Couldn't start recording",
@@ -675,16 +688,18 @@ impl Annuncia {
                     // The bubble stays up through `Stopping`, so going straight into the
                     // countdown doesn't flicker it.
                     state.phase = Phase::Idle;
+                    state.start_recording(cx);
+                    // After starting, which clears the notice.
                     if let Err(err) = result {
-                        state.post(
+                        state.show(
                             Notice::error(
                                 "Couldn't restart cleanly",
                                 "The take was thrown away, but capture didn't stop as expected.",
                             )
                             .detail(format!("{err:#}")),
+                            cx,
                         );
                     }
-                    state.start_recording(cx);
                     return;
                 }
                 if let Ok(Some(path)) = &result {
@@ -713,7 +728,13 @@ impl Annuncia {
                                     "The take was thrown away, but capture didn't stop as \
                                      expected.",
                                 ),
-                                _ => Notice::error(
+                                // Only when quitting: otherwise a restart ends further up.
+                                End::Restart => Notice::error(
+                                    "Couldn't restart cleanly",
+                                    "The take was thrown away, but capture didn't stop as \
+                                     expected.",
+                                ),
+                                End::Save => Notice::error(
                                     "Couldn't save the recording",
                                     "Anything Annuncia could keep is in your recordings folder.",
                                 ),
@@ -914,9 +935,14 @@ impl Annuncia {
                         }
                         state.windows = windows;
                     }
-                    Err(err) => state.show_notice(
-                        format!("{err:#}"),
-                        Some(("Open Settings".into(), Permission::Screen.settings_url())),
+                    // The error is the permission hint, already a sentence.
+                    Err(err) => state.show(
+                        Notice::error("Couldn't list windows", err.to_string())
+                            .action(Some((
+                                "Open Settings".into(),
+                                Permission::Screen.settings_url(),
+                            )))
+                            .timed(),
                         cx,
                     ),
                 }
@@ -1642,14 +1668,18 @@ impl Annuncia {
                     // falls back to the avatar or "Camera off".
                     Err(err) => {
                         self.camera_failed = true;
-                        self.post(
-                            Notice::error(
+                        // Opening the panel starts the camera, so a Mac without one would keep
+                        // this pinned: it times out, unlike errors about a recording.
+                        let notice = match plain_sentence(&err) {
+                            Some(sentence) => Notice::error("Camera unavailable", sentence),
+                            None => Notice::error(
                                 "Camera unavailable",
                                 "Check that no other app is using the camera, then turn it off \
                                  and on again.",
                             )
                             .detail(format!("{err:#}")),
-                        );
+                        };
+                        self.post(notice.timed());
                     }
                 }
             }
@@ -1680,7 +1710,8 @@ impl Annuncia {
                     .action(Some((
                         "Open Settings".into(),
                         Permission::Camera.settings_url(),
-                    ))),
+                    )))
+                    .timed(),
                 );
             }
         }
@@ -1771,6 +1802,25 @@ impl Annuncia {
 }
 
 /// Shared options for our borderless overlay windows; the native frame is applied afterwards.
+/// Errors the recorder and camera already word for people, by how they start. They come back as
+/// plain `anyhow` errors, so they're matched by text; keep these in step with `recorder.rs` and
+/// `camera.rs`.
+const PLAIN_ERRORS: &[&str] = &[
+    "That window has closed",
+    "There's no display to record",
+    "No camera is connected",
+    "The camera may be in use",
+];
+
+/// The error itself, when it's one of those sentences, to show in place of generic advice.
+fn plain_sentence(err: &anyhow::Error) -> Option<String> {
+    let message = err.to_string();
+    PLAIN_ERRORS
+        .iter()
+        .any(|plain| message.starts_with(plain))
+        .then_some(message)
+}
+
 pub fn overlay_options(rect: TopLeftRect, focus: bool) -> WindowOptions {
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds {
