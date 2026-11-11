@@ -1465,6 +1465,15 @@ impl LibraryView {
         let volume_bar = detail.volume_bar.clone();
         let playback = PLAYBACK.get();
         let volume = if playback.muted { 0. } else { playback.volume };
+        // The rate actually playing, which J and L change for a while; else the speed play
+        // will use.
+        let rate = detail.player.rate();
+        let speed = if rate == 0. { playback.speed } else { rate };
+        let speed_label = if speed < 0. {
+            format!("−{}x", -speed)
+        } else {
+            format!("{speed}x")
+        };
 
         // A hairline edge keeps the black video frame from melting into the black window.
         let video = div()
@@ -1582,7 +1591,7 @@ impl LibraryView {
                     .cursor_pointer()
                     .text_size(px(12.))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(if playback.speed == 1. {
+                    .text_color(if speed == 1. {
                         theme.text_muted
                     } else {
                         theme.text
@@ -1590,7 +1599,7 @@ impl LibraryView {
                     .hover(|s| s.bg(theme.control_hover))
                     .tooltip(tip("Playback speed"))
                     .on_click(cx.listener(|this, _, _, cx| this.cycle_speed(cx)))
-                    .child(format!("{}x", playback.speed)),
+                    .child(speed_label),
             )
             .child(
                 div()
