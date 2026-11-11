@@ -100,6 +100,60 @@ impl Player {
         unsafe { self.player.pause() }
     }
 
+    /// The speed `play` plays at; it changes the current speed too when playing forward.
+    pub fn set_speed(&self, speed: f32) {
+        // SAFETY: main-thread property writes.
+        unsafe {
+            self.player.setDefaultRate(speed);
+            if self.player.rate() > 0. {
+                self.player.setRate(speed);
+            }
+        }
+    }
+
+    /// Current playback rate: 0 when paused, negative when playing backwards.
+    pub fn rate(&self) -> f32 {
+        // SAFETY: property read on the main thread.
+        unsafe { self.player.rate() }
+    }
+
+    /// Plays at `rate` (negative for backwards) without changing `play`'s speed.
+    pub fn play_at(&self, rate: f32) {
+        // SAFETY: main-thread call.
+        unsafe { self.player.setRate(rate) }
+    }
+
+    pub fn can_play_backwards(&self) -> bool {
+        // SAFETY: property reads on the main thread.
+        unsafe {
+            self.player
+                .currentItem()
+                .is_some_and(|item| item.canPlayReverse())
+        }
+    }
+
+    /// Pauses and moves `frames` frames forward (or back, when negative).
+    pub fn step(&self, frames: isize) {
+        // SAFETY: main-thread calls.
+        unsafe {
+            self.player.pause();
+            if let Some(item) = self.player.currentItem() {
+                item.stepByCount(frames);
+            }
+        }
+    }
+
+    /// 0 to 1.
+    pub fn set_volume(&self, volume: f32) {
+        // SAFETY: main-thread property write.
+        unsafe { self.player.setVolume(volume) }
+    }
+
+    pub fn set_muted(&self, muted: bool) {
+        // SAFETY: main-thread property write.
+        unsafe { self.player.setMuted(muted) }
+    }
+
     /// Current position in seconds.
     pub fn time(&self) -> f64 {
         // SAFETY: property read on the main thread.

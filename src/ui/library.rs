@@ -44,6 +44,27 @@ const COG: f32 = 28.;
 const SHOWN_MATCHES: usize = 3;
 /// How long Undo stays offered after a Trash.
 const UNDO_FOR: Duration = Duration::from_secs(6);
+/// The speeds the player's speed button cycles through.
+const SPEEDS: [f32; 4] = [1., 1.25, 1.5, 2.];
+const VOLUME_WIDTH: f32 = 64.;
+
+/// The player's speed, volume and mute, kept for the session from one recording to the next.
+#[derive(Clone, Copy)]
+struct Playback {
+    speed: f32,
+    volume: f32,
+    muted: bool,
+}
+
+thread_local! {
+    static PLAYBACK: Cell<Playback> = const {
+        Cell::new(Playback {
+            speed: 1.,
+            volume: 1.,
+            muted: false,
+        })
+    };
+}
 
 pub struct LibraryView {
     state: Entity<Annuncia>,
@@ -139,6 +160,11 @@ struct Detail {
     /// The scrubber's bounds, measured as it paints.
     bar: Rc<Cell<Option<Bounds<Pixels>>>>,
     scrubbing: bool,
+    /// The volume slider's bounds, measured as it paints.
+    volume_bar: Rc<Cell<Option<Bounds<Pixels>>>>,
+    adjusting_volume: bool,
+    /// Set by a frame step, which moves the player while it's paused: follow it.
+    stepped: bool,
     transcript_scroll: ScrollHandle,
     /// The paragraph the transcript last scrolled to while following playback.
     followed_paragraph: Option<usize>,
@@ -344,7 +370,14 @@ impl LibraryView {
             self.close_menu(cx);
             return;
         }
-        if ks.modifiers.platform && ks.key == "f" && self.detail.is_none() {
+        if ks.modifiers.platform && ks.key == "f" {
+            // From a recording too: back to the grid, to search.
+            if self.detail.is_some() {
+                self.close_detail(cx);
+            }
+            if let Some(field) = &self.search {
+                field.setHidden(false);
+            }
             native::focus_search_field(window, self.search.as_deref());
             return;
         }
@@ -361,6 +394,16 @@ impl LibraryView {
             "space" => self.toggle_play(cx),
             "left" => self.skip(-5., cx),
             "right" => self.skip(5., cx),
+            "," => self.step(-1, cx),
+            "." => self.step(1, cx),
+            "j" => self.play_backwards(cx),
+            "k" => {
+                if let Some(detail) = &self.detail {
+                    detail.player.pause();
+                    cx.notify();
+                }
+            }
+            "l" => self.play_forwards(cx),
             _ => {}
         }
     }
@@ -636,6 +679,10 @@ impl LibraryView {
         window.focus(&self.focus);
         self.state.update(cx, |s, cx| s.load_transcript(&path, cx));
         let player = Player::new(&path, mtm);
+        let playback = PLAYBACK.get();
+        player.set_speed(playback.speed);
+        player.set_volume(playback.volume);
+        player.set_muted(playback.muted);
         // Show the first frame right away.
         player.seek(at, true);
         if play {
@@ -647,6 +694,9 @@ impl LibraryView {
             playhead: at,
             bar: Rc::new(Cell::new(None)),
             scrubbing: false,
+            volume_bar: Rc::new(Cell::new(None)),
+            adjusting_volume: false,
+            stepped: false,
             transcript_scroll: ScrollHandle::new(),
             followed_paragraph: None,
             error: None,
@@ -678,7 +728,7 @@ impl LibraryView {
             return;
         };
         let mut changed = detail.player.poll();
-        if detail.player.is_playing() && !detail.scrubbing {
+        if (detail.player.is_playing() || detail.stepped) && !detail.scrubbing {
             let t = detail.player.time();
             if (t - detail.playhead).abs() > 1e-3 {
                 detail.playhead = t;
@@ -720,6 +770,7 @@ impl LibraryView {
     fn seek(&mut self, t: f64, exact: bool) {
         let duration = self.detail_duration().unwrap_or(f64::MAX);
         if let Some(detail) = &mut self.detail {
+            detail.stepped = false;
             detail.playhead = t.clamp(0., duration);
             detail.player.seek(detail.playhead, exact);
         }
@@ -730,6 +781,99 @@ impl LibraryView {
             self.seek(t, true);
             cx.notify();
         }
+    }
+
+    fn step(&mut self, frames: isize, cx: &mut Context<Self>) {
+        if let Some(detail) = &mut self.detail {
+            detail.player.step(frames);
+            detail.stepped = true;
+            cx.notify();
+        }
+    }
+
+    /// L: plays, or plays faster each time while already playing forward.
+    fn play_forwards(&mut self, cx: &mut Context<Self>) {
+        let Some(detail) = &self.detail else {
+            return;
+        };
+        let rate = detail.player.rate();
+        if rate > 0. {
+            if let Some(&faster) = SPEEDS.iter().find(|&&s| s > rate) {
+                detail.player.play_at(faster);
+            }
+            cx.notify();
+        } else {
+            if rate < 0. {
+                detail.player.pause();
+            }
+            self.toggle_play(cx);
+        }
+    }
+
+    /// J: plays backwards, faster each time; where the file can't, skips back instead.
+    fn play_backwards(&mut self, cx: &mut Context<Self>) {
+        let Some(detail) = &self.detail else {
+            return;
+        };
+        if !detail.player.can_play_backwards() {
+            self.skip(-5., cx);
+            return;
+        }
+        let rate = detail.player.rate();
+        let backwards = if rate < 0. {
+            SPEEDS
+                .iter()
+                .find(|&&s| s > -rate)
+                .copied()
+                .unwrap_or(-rate)
+        } else {
+            1.
+        };
+        detail.player.play_at(-backwards);
+        cx.notify();
+    }
+
+    /// Steps to the next playback speed, which then holds for the session.
+    fn cycle_speed(&mut self, cx: &mut Context<Self>) {
+        let mut playback = PLAYBACK.get();
+        let next = SPEEDS
+            .iter()
+            .position(|&s| s == playback.speed)
+            .map_or(0, |i| (i + 1) % SPEEDS.len());
+        playback.speed = SPEEDS[next];
+        PLAYBACK.set(playback);
+        if let Some(detail) = &self.detail {
+            detail.player.set_speed(playback.speed);
+        }
+        cx.notify();
+    }
+
+    fn toggle_mute(&mut self, cx: &mut Context<Self>) {
+        let mut playback = PLAYBACK.get();
+        playback.muted = !playback.muted;
+        PLAYBACK.set(playback);
+        if let Some(detail) = &self.detail {
+            detail.player.set_muted(playback.muted);
+        }
+        cx.notify();
+    }
+
+    /// Sets the volume from a point on its slider; turning it up unmutes.
+    fn set_volume_at(&mut self, x: Pixels, cx: &mut Context<Self>) {
+        let Some(detail) = &self.detail else {
+            return;
+        };
+        let Some(bounds) = detail.volume_bar.get() else {
+            return;
+        };
+        let volume = (f32::from(x - bounds.origin.x) / f32::from(bounds.size.width)).clamp(0., 1.);
+        let mut playback = PLAYBACK.get();
+        playback.volume = volume;
+        playback.muted = volume == 0.;
+        PLAYBACK.set(playback);
+        detail.player.set_volume(volume);
+        detail.player.set_muted(playback.muted);
+        cx.notify();
     }
 
     fn time_at(&self, x: Pixels) -> Option<f64> {
@@ -749,6 +893,14 @@ impl LibraryView {
     }
 
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.detail.as_ref().is_some_and(|d| d.adjusting_volume) {
+            if event.pressed_button == Some(MouseButton::Left) {
+                self.set_volume_at(event.position.x, cx);
+            } else if let Some(detail) = &mut self.detail {
+                detail.adjusting_volume = false;
+            }
+            return;
+        }
         if !self.detail.as_ref().is_some_and(|d| d.scrubbing) {
             return;
         }
@@ -766,6 +918,7 @@ impl LibraryView {
         let Some(detail) = &mut self.detail else {
             return;
         };
+        detail.adjusting_volume = false;
         if detail.scrubbing {
             detail.scrubbing = false;
             detail.player.seek(detail.playhead, true);
@@ -1257,6 +1410,9 @@ impl LibraryView {
         let playhead = detail.playhead;
         let fraction = duration.map_or(0., |d| (playhead / d).clamp(0., 1.)) as f32;
         let bar = detail.bar.clone();
+        let volume_bar = detail.volume_bar.clone();
+        let playback = PLAYBACK.get();
+        let volume = if playback.muted { 0. } else { playback.volume };
 
         // A hairline edge keeps the black video frame from melting into the black window.
         let video = div()
@@ -1358,6 +1514,99 @@ impl LibraryView {
                         canvas(move |b, _, _| bar.set(Some(b)), |_, _, _, _| {})
                             .absolute()
                             .inset_0(),
+                    ),
+            )
+            .child(
+                div()
+                    .id("speed")
+                    .h(px(24.))
+                    .min_w(px(44.))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .px(px(6.))
+                    .rounded(px(6.))
+                    .cursor_pointer()
+                    .text_size(px(12.))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(if playback.speed == 1. {
+                        theme.text_muted
+                    } else {
+                        theme.text
+                    })
+                    .hover(|s| s.bg(theme.control_hover))
+                    .on_click(cx.listener(|this, _, _, cx| this.cycle_speed(cx)))
+                    .child(format!("{}x", playback.speed)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap(px(6.))
+                    .child(
+                        div()
+                            .id("mute")
+                            .size(px(24.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(px(6.))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme.control_hover))
+                            .on_click(cx.listener(|this, _, _, cx| this.toggle_mute(cx)))
+                            .child(icon(
+                                "speaker",
+                                14.,
+                                if volume == 0. {
+                                    theme.text_muted.opacity(0.5)
+                                } else {
+                                    theme.text
+                                },
+                            )),
+                    )
+                    .child(
+                        div()
+                            .id("volume")
+                            .w(px(VOLUME_WIDTH))
+                            .h(px(20.))
+                            .relative()
+                            .flex()
+                            .items_center()
+                            .cursor_pointer()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                                    if let Some(detail) = &mut this.detail {
+                                        detail.adjusting_volume = true;
+                                    }
+                                    this.set_volume_at(event.position.x, cx);
+                                }),
+                            )
+                            .child(
+                                div()
+                                    .relative()
+                                    .w_full()
+                                    .h(px(4.))
+                                    .rounded(px(2.))
+                                    .bg(theme.control_active)
+                                    .child(
+                                        div()
+                                            .absolute()
+                                            .top_0()
+                                            .left_0()
+                                            .h_full()
+                                            .w(relative(volume))
+                                            .rounded(px(2.))
+                                            .bg(theme.text_muted),
+                                    ),
+                            )
+                            .child(
+                                canvas(move |b, _, _| volume_bar.set(Some(b)), |_, _, _, _| {})
+                                    .absolute()
+                                    .inset_0(),
+                            ),
                     ),
             );
 
