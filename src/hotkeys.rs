@@ -73,23 +73,35 @@ impl Hotkeys {
         })
     }
 
-    /// Re-registers every shortcut; returns human-readable problems (bad strings, conflicts).
-    pub fn apply(&mut self, settings: &HotkeySettings) -> Vec<String> {
+    /// Re-registers every shortcut; returns the problems (bad strings, conflicts) with the action
+    /// each belongs to, so Settings can show them on that row.
+    pub fn apply(&mut self, settings: &HotkeySettings) -> Vec<(HotkeyAction, String)> {
         for (hotkey, _) in self.registered.drain(..) {
             let _ = self.manager.unregister(hotkey);
         }
         let mut problems = Vec::new();
+        // Parsed first so two actions on the same keys are caught before the OS sees either.
+        let mut parsed: Vec<(HotKey, HotkeyAction)> = Vec::new();
         for action in HotkeyAction::ALL {
             let binding = action.binding(settings);
             if binding.is_empty() {
                 continue;
             }
             match HotKey::from_str(binding) {
-                Ok(hotkey) => match self.manager.register(hotkey) {
-                    Ok(()) => self.registered.push((hotkey, action)),
-                    Err(err) => problems.push(format!("{}: {err}", action.label())),
+                Ok(hotkey) => match parsed.iter().find(|(h, _)| h.id() == hotkey.id()) {
+                    Some((_, first)) => {
+                        problems.push((*first, format!("Same as {}", action.label())));
+                        problems.push((action, format!("Same as {}", first.label())));
+                    }
+                    None => parsed.push((hotkey, action)),
                 },
-                Err(err) => problems.push(format!("{} ({binding}): {err}", action.label())),
+                Err(err) => problems.push((action, format!("{binding}: {err}"))),
+            }
+        }
+        for (hotkey, action) in parsed {
+            match self.manager.register(hotkey) {
+                Ok(()) => self.registered.push((hotkey, action)),
+                Err(err) => problems.push((action, err.to_string())),
             }
         }
         problems

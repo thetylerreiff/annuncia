@@ -353,9 +353,18 @@ impl Render for SettingsView {
             } else {
                 display_binding(action.binding(&settings.hotkeys)).into()
             };
-            shortcuts = shortcuts.child(row(
+            let problem = problems
+                .iter()
+                .find(|(a, _)| *a == action)
+                .map(|(_, p)| p.clone());
+            let outline = if problem.is_some() {
+                theme.record
+            } else {
+                gpui::transparent_black()
+            };
+            shortcuts = shortcuts.child(detail_row(
                 action.label(),
-                None,
+                problem.map(|p| (p, theme.record)),
                 button(
                     SharedString::from(format!("hotkey-{action:?}")),
                     label,
@@ -363,6 +372,9 @@ impl Render for SettingsView {
                     theme,
                 )
                 .min_w(px(96.))
+                // Always has a border, so a problem outlining it doesn't shift the layout.
+                .border_1()
+                .border_color(outline)
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.capturing = Some(action);
                     window.focus(&this.focus);
@@ -370,28 +382,16 @@ impl Render for SettingsView {
                     this.state.update(cx, |s, _| s.suspend_hotkeys());
                     cx.notify();
                 })),
-                theme,
             ));
         }
-        let shortcuts = shortcuts
-            .child(
-                div()
-                    .px(px(14.))
-                    .py(px(10.))
-                    .text_size(px(11.5))
-                    .text_color(theme.text_muted)
-                    .child(
-                        "Click a shortcut, then press the new keys. Esc cancels, Delete clears.",
-                    ),
-            )
-            .children(problems.into_iter().map(|p| {
-                div()
-                    .px(px(14.))
-                    .py(px(8.))
-                    .text_size(px(11.5))
-                    .text_color(theme.record)
-                    .child(p)
-            }));
+        let shortcuts = shortcuts.child(
+            div()
+                .px(px(14.))
+                .py(px(10.))
+                .text_size(px(11.5))
+                .text_color(theme.text_muted)
+                .child("Click a shortcut, then press the new keys. Esc cancels, Delete clears."),
+        );
 
         let page = match self.page {
             Page::General => general.into_any_element(),
@@ -970,6 +970,15 @@ pub fn row(
     control: impl IntoElement,
     theme: Theme,
 ) -> impl IntoElement {
+    detail_row(label, detail.map(|d| (d, theme.text_muted)), control)
+}
+
+/// A row whose detail line has its own colour, for problems.
+fn detail_row(
+    label: &'static str,
+    detail: Option<(String, gpui::Hsla)>,
+    control: impl IntoElement,
+) -> impl IntoElement {
     div()
         .flex()
         .items_center()
@@ -982,13 +991,8 @@ pub fn row(
                 .flex_1()
                 .min_w_0()
                 .child(div().text_size(px(13.)).child(label))
-                .when_some(detail, |d, detail| {
-                    d.child(
-                        div()
-                            .text_size(px(11.5))
-                            .text_color(theme.text_muted)
-                            .child(detail),
-                    )
+                .when_some(detail, |d, (detail, color)| {
+                    d.child(div().text_size(px(11.5)).text_color(color).child(detail))
                 }),
         )
         .child(control)

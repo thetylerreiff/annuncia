@@ -121,7 +121,7 @@ pub struct Annuncia {
     pub frames: Arc<FrameSlot>,
     /// Composited frames for the pop-out bubble.
     pub popout_frames: Arc<PopoutSlot>,
-    pub hotkey_problems: Vec<String>,
+    pub hotkey_problems: Vec<(crate::hotkeys::HotkeyAction, String)>,
     /// Transcripts of recordings made (or edited) this session, by file.
     pub transcripts: HashMap<PathBuf, TranscriptState>,
     /// The speech model being downloaded, if any.
