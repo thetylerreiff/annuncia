@@ -715,7 +715,13 @@ impl Annuncia {
                                     "The take was thrown away, but capture didn't stop as \
                                      expected.",
                                 ),
-                                _ => Notice::error(
+                                // Only when quitting: otherwise a restart ends further up.
+                                End::Restart => Notice::error(
+                                    "Couldn't restart cleanly",
+                                    "The take was thrown away, but capture didn't stop as \
+                                     expected.",
+                                ),
+                                End::Save => Notice::error(
                                     "Couldn't save the recording",
                                     "Anything Annuncia could keep is in your recordings folder.",
                                 ),
