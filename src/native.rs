@@ -519,3 +519,37 @@ pub fn focus_search_field(window: &Window, field: Option<&NSSearchField>) {
         None => ns.makeFirstResponder(Some(&view)),
     };
 }
+
+/// The icon of the app running as `pid`, as a PNG cached by bundle id (made once per app).
+/// Blocks, so call it off the main thread.
+pub fn app_icon(pid: i32) -> Option<std::path::PathBuf> {
+    use objc2::AnyThread as _;
+    use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSRunningApplication};
+
+    // NSRunningApplication is documented as thread safe.
+    let app = NSRunningApplication::runningApplicationWithProcessIdentifier(pid)?;
+    let bundle_id = app.bundleIdentifier()?.to_string();
+    let path = dirs::cache_dir()?
+        .join("annuncia")
+        .join("app-icons")
+        .join(format!("{bundle_id}.png"));
+    if path.exists() {
+        return Some(path);
+    }
+    std::fs::create_dir_all(path.parent()?).ok()?;
+    let icon = app.icon()?;
+    // Twice the list's 18 pt, so it stays sharp on Retina.
+    let mut rect = NSRect::new(NSPoint::new(0., 0.), NSSize::new(36., 36.));
+    // SAFETY: `rect` outlives the call; no context or hints.
+    let image = unsafe { icon.CGImageForProposedRect_context_hints(&mut rect, None, None) }?;
+    let bitmap = NSBitmapImageRep::initWithCGImage(NSBitmapImageRep::alloc(), &image);
+    // SAFETY: an empty properties dictionary.
+    let png = unsafe {
+        bitmap.representationUsingType_properties(
+            NSBitmapImageFileType::PNG,
+            &objc2_foundation::NSDictionary::<NSString, AnyObject>::new(),
+        )
+    }?;
+    png.writeToFile_atomically(&NSString::from_str(&path.to_string_lossy()), true)
+        .then_some(path)
+}

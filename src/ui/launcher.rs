@@ -8,7 +8,7 @@ use gpui::{
     AnyElement, App, AppContext as _, Context, Div, Entity, FocusHandle, Focusable, FontWeight,
     Hsla, InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Render,
     SharedString, StatefulInteractiveElement as _, Styled as _, Window, WindowHandle, canvas, div,
-    hsla, prelude::FluentBuilder as _, px, relative,
+    hsla, img, prelude::FluentBuilder as _, px, relative,
 };
 
 use crate::app::{self, Annuncia};
@@ -603,25 +603,38 @@ impl Launcher {
                 .cursor_pointer()
                 .when(selected, |d| d.bg(theme.accent.opacity(0.22)))
                 .when(!selected, |d| d.hover(|s| s.bg(theme.tile_hover)))
+                .flex()
+                .items_center()
+                .gap(px(8.))
                 .on_click(move |_, _, cx| {
                     handle.update(cx, |s, cx| {
                         s.selected_window = Some(id);
                         cx.notify();
                     })
                 })
+                // An empty square when there's no icon, so the names still line up.
+                .child(match w.icon.clone() {
+                    Some(path) => img(path).size(px(18.)).flex_none().into_any_element(),
+                    None => div().size(px(18.)).flex_none().into_any_element(),
+                })
                 .child(
                     div()
-                        .text_size(px(12.5))
-                        .font_weight(FontWeight::MEDIUM)
-                        .truncate()
-                        .child(w.app.clone()),
-                )
-                .child(
-                    div()
-                        .text_size(px(11.5))
-                        .text_color(theme.text_muted)
-                        .truncate()
-                        .child(w.title.clone()),
+                        .flex_1()
+                        .min_w_0()
+                        .child(
+                            div()
+                                .text_size(px(12.5))
+                                .font_weight(FontWeight::MEDIUM)
+                                .truncate()
+                                .child(w.app.clone()),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.5))
+                                .text_color(theme.text_muted)
+                                .truncate()
+                                .child(w.title.clone()),
+                        ),
                 )
         }))
         .into_any_element()

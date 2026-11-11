@@ -763,7 +763,16 @@ impl Annuncia {
         self.cameras = camera::devices();
         self.microphones = recorder::microphones();
         self.windows_loading = true;
-        let task = cx.background_spawn(async { recorder::list_windows() });
+        // App icons come from AppKit and are written to disk the first time, so they're looked up
+        // here, off the main thread, too.
+        let task = cx.background_spawn(async {
+            recorder::list_windows().map(|mut windows| {
+                for window in &mut windows {
+                    window.icon = native::app_icon(window.pid);
+                }
+                windows
+            })
+        });
         cx.spawn(async move |this, cx| {
             let result = task.await;
             let _ = this.update(cx, |state, cx| {
