@@ -5,9 +5,10 @@ use std::time::{Duration, Instant};
 
 use gpui::{
     Animation, AnimationExt as _, AnyElement, App, AppContext as _, BoxShadow, Context, Div,
-    Entity, FontWeight, Hsla, InteractiveElement as _, IntoElement, ParentElement as _, Render,
-    SharedString, StatefulInteractiveElement as _, Styled as _, Window, WindowHandle, div, hsla,
-    point, prelude::FluentBuilder as _, pulsating_between, px, rgb,
+    Entity, FontWeight, Hsla, InteractiveElement as _, IntoElement, MouseMoveEvent,
+    ParentElement as _, Render, SharedString, Stateful, StatefulInteractiveElement as _,
+    Styled as _, Window, WindowHandle, div, hsla, point, prelude::FluentBuilder as _,
+    pulsating_between, px, rgb,
 };
 
 use crate::app::{self, Annuncia, End, Notice, Phase, Severity, TranscriptState};
@@ -29,8 +30,10 @@ const CAPSULE_HEIGHT: f64 = 30.;
 const BUTTON: f32 = 24.;
 const RECORD: u32 = 0xff453a;
 const SAVED_DRAWER: f64 = 38.;
-/// The strip under the bar that spells out an armed control ("Click again to discard"). It sits
-/// below rather than in the bar, which can't grow or change without moving the controls.
+/// The strip under the bar that names the control under the pointer, or spells out an armed one
+/// ("Click again to discard"). It sits below rather than in the bar, which can't grow or change
+/// without moving the controls. (GPUI draws tooltips inside this window, which is only as tall
+/// as the bar, so a tooltip would cover the bar or slip behind the notch.)
 const HINT_STRIP: f64 = 20.;
 /// Notice text sets its own line height, so the drawer can be sized before layout.
 const NOTICE_LINE: f32 = 15.;
@@ -46,6 +49,10 @@ pub struct Hud {
     /// Restart and Discard throw the recording away, so each takes a second click before this
     /// passes.
     armed: Option<(Armed, Instant)>,
+    /// The bar control under the pointer, by element id.
+    pointer_on: Option<&'static str>,
+    /// Set by a control's mouse move, which runs before the HUD's own, so the HUD's keeps it.
+    pointer_claimed: bool,
     /// When the transcript was last copied, for a moment of "Copied" feedback.
     copied_at: Option<Instant>,
     /// When the saved file was last copied, likewise.
@@ -85,6 +92,8 @@ pub fn open(state: Entity<Annuncia>, cx: &mut App) -> Option<WindowHandle<Hud>> 
                 applied: Some(rect),
                 hovered: false,
                 armed: None,
+                pointer_on: None,
+                pointer_claimed: false,
                 copied_at: None,
                 file_copied_at: None,
             }
@@ -147,7 +156,7 @@ impl Render for Hud {
         if !recording {
             self.armed = None;
         }
-        let hint = self.bar_hint(theme);
+        let hint = self.bar_hint(theme, state);
         let drawer_height = notice_height
             + if saved { SAVED_DRAWER } else { 0. }
             + if hint.is_some() { HINT_STRIP } else { 0. };
@@ -237,6 +246,10 @@ impl Render for Hud {
             // so it opens the drawer, and `watch_pointer` closes it.
             .on_mouse_move(cx.listener(move |this, _, _, cx| {
                 state.update(cx, |s, _| s.hold_saved());
+                // Off every control: drop the name under the bar.
+                if !std::mem::take(&mut this.pointer_claimed) && this.pointer_on.take().is_some() {
+                    cx.notify();
+                }
                 if !this.hovered {
                     this.hovered = true;
                     this.watch_pointer(cx);
@@ -273,6 +286,7 @@ impl Hud {
                 {
                     let _ = this.update(cx, |hud, cx| {
                         hud.hovered = false;
+                        hud.pointer_on = None;
                         cx.notify();
                     });
                     break;
@@ -282,13 +296,51 @@ impl Hud {
         .detach();
     }
 
-    /// Words for the strip under the bar: what an armed control will do.
-    fn bar_hint(&self, theme: Theme) -> Option<(SharedString, Hsla)> {
-        let text = match self.armed()? {
-            Armed::Restart => "Click again to restart",
-            Armed::Discard => "Click again to discard",
+    /// Words for the strip under the bar: what an armed control will do, or else what the
+    /// control under the pointer does.
+    fn bar_hint(&self, theme: Theme, state: &Annuncia) -> Option<(SharedString, Hsla)> {
+        if let Some(armed) = self.armed() {
+            let text = match armed {
+                Armed::Restart => "Click again to restart",
+                Armed::Discard => "Click again to discard",
+            };
+            return Some((text.into(), theme.record));
+        }
+        let keys = &state.settings.hotkeys;
+        let recording = matches!(state.phase, Phase::Recording { .. });
+        // Resolved here rather than when the pointer arrived, so Pause turns into Resume and a
+        // control that has gone away takes its name with it.
+        let text = match self.pointer_on? {
+            "pause" if recording && state.phase.is_paused() => {
+                with_key("Resume", &keys.pause_recording)
+            }
+            "pause" if recording => with_key("Pause", &keys.pause_recording),
+            "stop" if recording => with_key("Stop and save", &keys.toggle_recording),
+            "restart" if recording => with_key("Restart", &keys.restart_recording),
+            "discard" if recording => with_key("Discard", &keys.cancel_recording),
+            "cancel" if matches!(state.phase, Phase::Countdown { .. }) => {
+                with_key("Cancel countdown", &keys.cancel_recording)
+            }
+            "dismiss" if matches!(state.phase, Phase::Idle | Phase::Saved { .. }) => {
+                "Dismiss".into()
+            }
+            _ => return None,
         };
-        Some((text.into(), theme.record))
+        Some((text, white(0.7)))
+    }
+
+    /// Notes that the pointer is on the control `id`, for the strip under the bar.
+    fn name_on_hover(
+        id: &'static str,
+        cx: &Context<Self>,
+    ) -> impl Fn(&MouseMoveEvent, &mut Window, &mut App) + 'static {
+        cx.listener(move |this, _: &MouseMoveEvent, _, cx| {
+            this.pointer_claimed = true;
+            if this.pointer_on != Some(id) {
+                this.pointer_on = Some(id);
+                cx.notify();
+            }
+        })
     }
 
     fn armed(&self) -> Option<Armed> {
@@ -314,8 +366,10 @@ impl Hud {
                         .font_weight(FontWeight::SEMIBOLD)
                         .child(left.to_string())
                         .into_any_element(),
-                    self.icon_button("cancel", "✕", white(0.7), |s, cx| s.cancel_recording(cx))
-                        .into_any_element(),
+                    self.icon_button("cancel", "✕", white(0.7), cx, |s, cx| {
+                        s.cancel_recording(cx)
+                    })
+                    .into_any_element(),
                 )
             }
             Phase::Starting => (
@@ -379,9 +433,10 @@ impl Hud {
                             "pause",
                             if paused { "play" } else { "pause" },
                             gpui::white(),
+                            cx,
                             |s, cx| s.toggle_pause(cx),
                         ))
-                        .child(self.stop_button())
+                        .child(self.stop_button(cx))
                         .when(expanded, |d| d.child(self.armed_button(Armed::Discard, cx)))
                         .into_any_element(),
                 )
@@ -406,8 +461,10 @@ impl Hud {
                     .child(div().size(px(8.)).rounded_full().bg(rgb(0x30d158)))
                     .child(label("Saved", white(0.92)))
                     .into_any_element(),
-                self.icon_button("dismiss", "✕", white(0.7), |s, cx| s.dismiss_saved(cx))
-                    .into_any_element(),
+                self.icon_button("dismiss", "✕", white(0.7), cx, |s, cx| {
+                    s.dismiss_saved(cx)
+                })
+                .into_any_element(),
             ),
             Phase::Idle => {
                 let error = state
@@ -426,8 +483,10 @@ impl Hud {
                         }))
                         .child(label(if error { "Error" } else { "Notice" }, white(0.92)))
                         .into_any_element(),
-                    self.icon_button("dismiss", "✕", white(0.7), |s, cx| s.dismiss_saved(cx))
-                        .into_any_element(),
+                    self.icon_button("dismiss", "✕", white(0.7), cx, |s, cx| {
+                        s.dismiss_saved(cx)
+                    })
+                    .into_any_element(),
                 )
             }
         }
@@ -487,9 +546,12 @@ impl Hud {
             })
             .when(own_dismiss, |d| {
                 d.child(
-                    self.icon_button("notice-dismiss", "✕", white(0.7), |s, cx| {
+                    // In the drawer, where the strip would push it from under the pointer, so it
+                    // gets a tooltip instead.
+                    self.icon_button("notice-dismiss", "✕", white(0.7), cx, |s, cx| {
                         s.dismiss_notice(cx)
-                    }),
+                    })
+                    .when(self.hovered, |d| d.tooltip(tip("Dismiss"))),
                 )
             })
     }
@@ -670,6 +732,7 @@ impl Hud {
             .justify_center()
             .rounded(px(6.))
             .cursor_pointer()
+            .on_mouse_move(Self::name_on_hover(id, cx))
             .when(confirming, |d| {
                 d.bg(hsla(3. / 360., 1., 0.61, 0.22))
                     .hover(|s| s.bg(hsla(3. / 360., 1., 0.61, 0.32)))
@@ -707,10 +770,11 @@ impl Hud {
             ))
     }
 
-    fn stop_button(&self) -> impl IntoElement {
+    fn stop_button(&self, cx: &Context<Self>) -> impl IntoElement {
         let state = self.state.clone();
         div()
             .id("stop")
+            .on_mouse_move(Self::name_on_hover("stop", cx))
             .size(px(BUTTON))
             .flex_none()
             .rounded(px(6.))
@@ -728,11 +792,13 @@ impl Hud {
         id: &'static str,
         name: &'static str,
         color: Hsla,
+        cx: &Context<Self>,
         on_click: impl Fn(&mut Annuncia, &mut Context<Annuncia>) + 'static,
     ) -> impl IntoElement {
         let state = self.state.clone();
         div()
             .id(id)
+            .on_mouse_move(Self::name_on_hover(id, cx))
             .size(px(BUTTON))
             .flex_none()
             .rounded(px(6.))
@@ -750,11 +816,13 @@ impl Hud {
         id: &'static str,
         glyph: &'static str,
         color: Hsla,
+        cx: &Context<Self>,
         on_click: impl Fn(&mut Annuncia, &mut Context<Annuncia>) + 'static,
-    ) -> impl IntoElement {
+    ) -> Stateful<Div> {
         let state = self.state.clone();
         div()
             .id(id)
+            .on_mouse_move(Self::name_on_hover(id, cx))
             .size(px(20.))
             .rounded_full()
             .hover(|s| s.bg(white(0.14)))
@@ -794,6 +862,15 @@ fn notice_height(notice: &Notice) -> f64 {
     let (message, detail) = notice_lines(notice);
     let title = usize::from(notice.title.is_some());
     (title + message + detail) as f64 * f64::from(NOTICE_LINE) + 18.
+}
+
+/// A control's name, with its shortcut when one is set.
+fn with_key(name: &'static str, binding: &str) -> SharedString {
+    if binding.is_empty() {
+        name.into()
+    } else {
+        format!("{name}  {}", display_binding(binding)).into()
+    }
 }
 
 /// The words in the strip under the bar.
