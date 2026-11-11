@@ -373,7 +373,10 @@ impl LibraryView {
                 return;
             }
         }
-        if ks.modifiers.platform && ks.key == "z" && self.undo.is_some() {
+        // ⌘-keys reach us even while the search field is being edited; there they're its own
+        // (⌘A, ⌘Z, ⌘⌫), not the grid's.
+        let editing = self.search_editing();
+        if ks.modifiers.platform && ks.key == "z" && self.undo.is_some() && !editing {
             self.undo_trash(cx);
             return;
         }
@@ -386,6 +389,9 @@ impl LibraryView {
                 field.setHidden(false);
             }
             native::focus_search_field(window, self.search.as_deref());
+            return;
+        }
+        if editing {
             return;
         }
         // The grid's keys, while it shows (not search results).
@@ -413,6 +419,13 @@ impl LibraryView {
             "l" => self.play_forwards(cx),
             _ => {}
         }
+    }
+
+    /// Whether the native search field has the keyboard.
+    fn search_editing(&self) -> bool {
+        self.search
+            .as_ref()
+            .is_some_and(|field| field.currentEditor().is_some())
     }
 
     fn on_grid_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
