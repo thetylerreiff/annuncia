@@ -399,7 +399,7 @@ impl Render for SettingsView {
             Page::AfterRecording => after.into_any_element(),
             Page::Camera => camera.into_any_element(),
             Page::Shortcuts => shortcuts.into_any_element(),
-            Page::About => about(theme),
+            Page::About => self.about(theme, cx),
         };
 
         div()
@@ -558,32 +558,92 @@ impl SettingsView {
     }
 }
 
-/// The icon, name, version and license.
-fn about(theme: Theme) -> AnyElement {
-    div()
-        .flex()
-        .items_center()
-        .gap(px(14.))
-        .child(img("images/icon.png").size(px(48.)).flex_none())
-        .child(
-            div()
-                .child(
-                    div()
-                        .text_size(px(15.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child("Annuncia"),
-                )
-                .child(
-                    div()
-                        .text_size(px(12.))
-                        .text_color(theme.text_muted)
-                        .child(format!(
-                            "Version {} · MIT License",
-                            crate::updater::display_version()
-                        )),
-                ),
-        )
-        .into_any_element()
+const REPO_URL: &str = "https://github.com/thetylerreiff/annuncia";
+
+/// What ships inside Annuncia, for the credits.
+const ACKNOWLEDGEMENTS: &str = "Annuncia is built with GPUI from the Zed project, updates itself with Sparkle, and transcribes on this Mac with transcribe.cpp running NVIDIA Parakeet and OpenAI Whisper models.";
+
+impl SettingsView {
+    /// The icon, name, version and license, then links and credits.
+    fn about(&self, theme: Theme, cx: &mut Context<Self>) -> AnyElement {
+        let link = |id: &'static str, label: &'static str, shown: &'static str, url: String| {
+            row(
+                label,
+                Some(shown.into()),
+                button(id, "Open", false, theme).on_click(move |_, _, _| native::open(&url)),
+                theme,
+            )
+        };
+        let state = self.state.clone();
+        let check = self.state.read(cx).updater.is_some().then(|| {
+            div().child(
+                button("about-check-updates", "Check Now", false, theme)
+                    .on_click(move |_, _, cx| state.update(cx, |s, cx| s.check_for_updates(cx))),
+            )
+        });
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(16.))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(14.))
+                    .child(img("images/icon.png").size(px(48.)).flex_none())
+                    .child(
+                        div()
+                            .flex_1()
+                            .child(
+                                div()
+                                    .text_size(px(15.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child("Annuncia"),
+                            )
+                            .child(div().text_size(px(12.)).text_color(theme.text_muted).child(
+                                format!(
+                                    "Version {} · MIT License",
+                                    crate::updater::display_version()
+                                ),
+                            )),
+                    )
+                    .children(check),
+            )
+            .child(
+                section(theme)
+                    .child(link(
+                        "about-website",
+                        "Website",
+                        "annuncia.thetylerreiff.co",
+                        "https://annuncia.thetylerreiff.co".into(),
+                    ))
+                    .child(link(
+                        "about-source",
+                        "Source code",
+                        "github.com/thetylerreiff/annuncia",
+                        REPO_URL.into(),
+                    ))
+                    .child(link(
+                        "about-issues",
+                        "Report a problem",
+                        "github.com/thetylerreiff/annuncia/issues/new",
+                        format!("{REPO_URL}/issues/new"),
+                    ))
+                    .child(link(
+                        "about-releases",
+                        "Release notes",
+                        "github.com/thetylerreiff/annuncia/releases",
+                        format!("{REPO_URL}/releases"),
+                    )),
+            )
+            .child(
+                div()
+                    .text_size(px(11.5))
+                    .text_color(theme.text_muted)
+                    .child(ACKNOWLEDGEMENTS),
+            )
+            .into_any_element()
+    }
 }
 
 impl SettingsView {
