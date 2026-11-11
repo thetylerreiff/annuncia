@@ -561,6 +561,8 @@ impl Annuncia {
                             "Open Settings".into(),
                             Permission::Screen.settings_url(),
                         )))
+                    } else if let Some(sentence) = plain_sentence(&err) {
+                        Notice::error("Couldn't start recording", sentence)
                     } else {
                         Notice::error(
                             "Couldn't start recording",
@@ -1573,14 +1575,15 @@ impl Annuncia {
                     // falls back to the avatar or "Camera off".
                     Err(err) => {
                         self.camera_failed = true;
-                        self.post(
-                            Notice::error(
+                        self.post(match plain_sentence(&err) {
+                            Some(sentence) => Notice::error("Camera unavailable", sentence),
+                            None => Notice::error(
                                 "Camera unavailable",
                                 "Check that no other app is using the camera, then turn it off \
                                  and on again.",
                             )
                             .detail(format!("{err:#}")),
-                        );
+                        });
                     }
                 }
             }
@@ -1702,6 +1705,25 @@ impl Annuncia {
 }
 
 /// Shared options for our borderless overlay windows; the native frame is applied afterwards.
+/// Errors the recorder and camera already word for people, by how they start. They come back as
+/// plain `anyhow` errors, so they're matched by text; keep these in step with `recorder.rs` and
+/// `camera.rs`.
+const PLAIN_ERRORS: &[&str] = &[
+    "That window has closed",
+    "There's no display to record",
+    "No camera is connected",
+    "The camera may be in use",
+];
+
+/// The error itself, when it's one of those sentences, to show in place of generic advice.
+fn plain_sentence(err: &anyhow::Error) -> Option<String> {
+    let message = err.to_string();
+    PLAIN_ERRORS
+        .iter()
+        .any(|plain| message.starts_with(plain))
+        .then_some(message)
+}
+
 pub fn overlay_options(rect: TopLeftRect, focus: bool) -> WindowOptions {
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds {
