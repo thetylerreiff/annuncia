@@ -913,8 +913,10 @@ impl SettingsView {
     ) -> AnyElement {
         let state = self.state.clone();
         let bubble = id == "bubble";
+        // Sized to its labels, with a floor so short ones ("Off") don't make a cramped segment.
         div()
-            .w(px(64. * labels.len() as f32))
+            .flex_none()
+            .min_w(px(56. * labels.len() as f32))
             .child(segmented(id, labels, selected, theme, move |i, _, cx| {
                 state.update(cx, |s, cx| {
                     s.update_settings(cx, |s| set(s, i));
