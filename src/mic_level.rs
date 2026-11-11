@@ -1,6 +1,7 @@
-//! The microphone's level, for the avatar that moves while you talk. The recording sends the
-//! microphone straight into the file, so the app never sees that audio; this opens the same
-//! microphone in a small capture session of its own and reads AVFoundation's power meter.
+//! The microphone's level, for the avatar that moves while you talk and the panel's meter. The
+//! recording sends the microphone straight into the file, so the app never sees that audio; this
+//! opens the same microphone in a small capture session of its own and reads AVFoundation's power
+//! meter.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -21,6 +22,9 @@ use objc2_foundation::NSString;
 /// speech into a laptop mic sits around -45 to -35 dB.
 const QUIET_DB: f32 = -52.;
 const LOUD_DB: f32 = -28.;
+/// Below this the microphone is delivering nothing at all (muted, unplugged or wrong device),
+/// rather than a quiet room, which still reads around -60 dB.
+const SILENT_DB: f32 = -80.;
 
 define_class!(
     #[unsafe(super(NSObject))]
@@ -66,6 +70,7 @@ pub struct MicLevel {
     delegate: Option<Retained<LevelDelegate>>,
     queue: dispatch2::DispatchRetained<DispatchQueue>,
     db: Arc<AtomicU32>,
+    device: Option<String>,
 }
 
 impl MicLevel {
@@ -116,6 +121,7 @@ impl MicLevel {
                 delegate: Some(delegate),
                 queue,
                 db,
+                device: device_id.map(str::to_owned),
             })
         }
     }
@@ -124,6 +130,16 @@ impl MicLevel {
     pub fn level(&self) -> f32 {
         let db = f32::from_bits(self.db.load(Ordering::Relaxed));
         ((db - QUIET_DB) / (LOUD_DB - QUIET_DB)).clamp(0., 1.)
+    }
+
+    /// Whether the microphone has delivered any sound, even room noise, in its latest buffer.
+    pub fn has_signal(&self) -> bool {
+        f32::from_bits(self.db.load(Ordering::Relaxed)) > SILENT_DB
+    }
+
+    /// The device asked for, as passed to `start`.
+    pub fn device(&self) -> Option<&str> {
+        self.device.as_deref()
     }
 }
 

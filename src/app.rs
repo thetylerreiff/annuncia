@@ -1326,13 +1326,25 @@ impl Annuncia {
             self.camera = None;
         }
 
-        // The animated avatar moves with your voice, but only while recording: metering opens
-        // the microphone, and the recording already has it open then.
-        let wants_meter = self.wants_bubble()
+        // Metering opens the microphone, so it runs only where it's seen: the animated avatar
+        // moves with your voice while recording (the recording has the microphone open then),
+        // and the panel shows a meter so a dead microphone is caught before recording. The
+        // panel closes before capture starts, which releases its meter. `MicLevel` never asks
+        // for access.
+        let avatar_meter = self.wants_bubble()
             && !self.settings.camera_enabled
             && self.settings.avatar_image.is_none()
-            && self.settings.mic_enabled
             && matches!(self.phase, Phase::Recording { .. });
+        let panel_meter = self.launcher.is_some() && !self.phase.is_active();
+        let wants_meter = self.settings.mic_enabled && (avatar_meter || panel_meter);
+        // Picking another microphone in the panel meters that one instead.
+        if self
+            .mic_level
+            .as_ref()
+            .is_some_and(|m| m.device() != self.settings.mic_device.as_deref())
+        {
+            self.mic_level = None;
+        }
         if wants_meter && self.mic_level.is_none() {
             self.mic_level = MicLevel::start(self.settings.mic_device.as_deref());
         } else if !wants_meter {

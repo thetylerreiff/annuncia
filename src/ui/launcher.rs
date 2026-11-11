@@ -2,13 +2,13 @@
 
 use std::cell::Cell;
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui::{
     AnyElement, App, AppContext as _, Context, Div, Entity, FocusHandle, Focusable, FontWeight,
     InteractiveElement as _, IntoElement, KeyDownEvent, ParentElement as _, Render, SharedString,
     StatefulInteractiveElement as _, Styled as _, Window, WindowHandle, canvas, div, hsla,
-    prelude::FluentBuilder as _, px,
+    prelude::FluentBuilder as _, px, relative,
 };
 
 use crate::app::{self, Annuncia};
@@ -21,6 +21,10 @@ const WIDTH: f64 = 320.;
 const RADIUS: f64 = 18.;
 /// Corner radius of the module tiles inside the panel.
 const TILE: f32 = 14.;
+/// How often the microphone meter moves on.
+const METER_FRAME: Duration = Duration::from_millis(40);
+/// A microphone that has delivered nothing for this long reads "No signal".
+const SILENCE: Duration = Duration::from_secs(3);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Picker {
@@ -35,6 +39,16 @@ pub struct Launcher {
     origin: (f64, f64),
     /// Window height last applied; the window follows the content's measured height.
     applied: Rc<Cell<f32>>,
+    /// The microphone meter, while the microphone is being metered.
+    meter: Option<Meter>,
+}
+
+struct Meter {
+    /// Eased level, 0 to 1.
+    level: f32,
+    /// When the microphone last delivered any sound.
+    heard: Instant,
+    silent: bool,
 }
 
 pub fn open(
@@ -103,12 +117,57 @@ impl Launcher {
         })
         .detach();
 
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(METER_FRAME).await;
+                if this.update(cx, |this, cx| this.step_meter(cx)).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
+
         Self {
             state,
             focus,
             picker: None,
             origin,
             applied: Rc::new(Cell::new(0.)),
+            meter: None,
+        }
+    }
+
+    /// Eases the meter toward the microphone's level the way the avatar's pulse does: quick to
+    /// rise with each syllable, slower to fall.
+    fn step_meter(&mut self, cx: &mut Context<Self>) {
+        let reading = self
+            .state
+            .read(cx)
+            .mic_level
+            .as_ref()
+            .map(|m| (m.level(), m.has_signal()));
+        let Some((level, signal)) = reading else {
+            if self.meter.take().is_some() {
+                cx.notify();
+            }
+            return;
+        };
+        let now = Instant::now();
+        let meter = self.meter.get_or_insert(Meter {
+            level: 0.,
+            heard: now,
+            silent: false,
+        });
+        if signal {
+            meter.heard = now;
+        }
+        let rate = if level > meter.level { 0.7 } else { 0.3 };
+        let before = meter.level;
+        meter.level += (level - meter.level) * rate;
+        let silent = now.duration_since(meter.heard) >= SILENCE;
+        if (meter.level - before).abs() > 0.002 || silent != meter.silent {
+            meter.silent = silent;
+            cx.notify();
         }
     }
 
@@ -178,7 +237,7 @@ impl Render for Launcher {
         let camera_tile = self.device_tile(
             "camera",
             "Camera",
-            camera_name,
+            device_line(camera_name, theme).into_any_element(),
             settings.camera_enabled,
             Picker::Camera,
             theme,
@@ -198,10 +257,23 @@ impl Render for Launcher {
                 |s, id| s.camera_device = id,
             )
         });
+        // A meter under the name while the microphone is metered, so a silent one shows before
+        // the recording rather than after.
+        let mic_detail = match &self.meter {
+            Some(meter) => div()
+                .child(if meter.silent {
+                    device_line("No signal".into(), theme)
+                } else {
+                    device_line(mic_name, theme)
+                })
+                .child(level_bar(meter.level, theme))
+                .into_any_element(),
+            None => device_line(mic_name, theme).into_any_element(),
+        };
         let mic_tile = self.device_tile(
             "mic",
             "Microphone",
-            mic_name,
+            mic_detail,
             settings.mic_enabled,
             Picker::Microphone,
             theme,
@@ -369,6 +441,32 @@ fn icon_circle(on: bool, name: &'static str, theme: Theme) -> Div {
         ))
 }
 
+/// The muted line under a device tile's label.
+fn device_line(text: String, theme: Theme) -> Div {
+    div()
+        .text_size(px(11.5))
+        .text_color(theme.text_muted)
+        .truncate()
+        .child(text)
+}
+
+/// A thin accent bar as long as the microphone is loud.
+fn level_bar(level: f32, theme: Theme) -> Div {
+    div()
+        .mt(px(4.))
+        .h(px(3.))
+        .w_full()
+        .rounded_full()
+        .bg(theme.icon_off)
+        .child(
+            div()
+                .h_full()
+                .w(relative(level.clamp(0., 1.)))
+                .rounded_full()
+                .bg(theme.accent),
+        )
+}
+
 fn icon_button(id: &'static str, name: &'static str, theme: Theme) -> gpui::Stateful<Div> {
     div()
         .id(id)
@@ -498,7 +596,7 @@ impl Launcher {
         &self,
         id: &'static str,
         label: &'static str,
-        device: String,
+        detail: AnyElement,
         enabled: bool,
         picker: Picker,
         theme: Theme,
@@ -548,13 +646,7 @@ impl Launcher {
                                     .font_weight(FontWeight::MEDIUM)
                                     .child(label),
                             )
-                            .child(
-                                div()
-                                    .text_size(px(11.5))
-                                    .text_color(theme.text_muted)
-                                    .truncate()
-                                    .child(device),
-                            ),
+                            .child(detail),
                     )
                     .child(icon(
                         if open {
