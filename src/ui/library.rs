@@ -40,7 +40,7 @@ const HEADER: f32 = 52.;
 const SEARCH_WIDTH: f32 = 260.;
 /// The settings cog at the header's right end, beside the search field.
 const COG: f32 = 28.;
-/// Matches listed per recording before "and N more".
+/// Matches listed per recording before "Show N more".
 const SHOWN_MATCHES: usize = 3;
 /// How long Undo stays offered after a Trash.
 const UNDO_FOR: Duration = Duration::from_secs(6);
@@ -79,6 +79,8 @@ pub struct LibraryView {
     /// Native, since GPUI has no text input; installed once the window exists.
     search: Option<Retained<NSSearchField>>,
     query: String,
+    /// Search results showing all their matches, not just the first few.
+    expanded: Vec<PathBuf>,
     /// Settings, while the window shows it instead of the recordings.
     settings: Option<(Entity<SettingsView>, Subscription)>,
     /// The right-click (or "⋯") menu, while it's open.
@@ -232,7 +234,7 @@ pub fn open(
             cx.defer_in(window, |this: &mut LibraryView, window, _| {
                 this.search = native::install_search_field(
                     window,
-                    "Search transcripts",
+                    "Search recordings",
                     f64::from(SEARCH_WIDTH),
                     f64::from((HEADER - 24.) / 2.),
                     f64::from(PADDING + COG + 8.),
@@ -247,6 +249,7 @@ pub fn open(
                 detail: None,
                 search: None,
                 query: String::new(),
+                expanded: Vec::new(),
                 settings: None,
                 menu: None,
                 error: None,
@@ -721,6 +724,7 @@ impl LibraryView {
             let query = field.stringValue().to_string();
             if query != self.query {
                 self.query = query;
+                self.expanded.clear();
                 cx.notify();
             }
         }
@@ -1981,16 +1985,18 @@ impl LibraryView {
                 1 => "1 match".to_string(),
                 n => format!("{n} matches"),
             };
+            let expanded = self.expanded.contains(&path);
+            let shown = if expanded { hits.len() } else { SHOWN_MATCHES };
             let lines = transcript.map(|t| {
                 hits.iter()
-                    .take(SHOWN_MATCHES)
+                    .take(shown)
                     .enumerate()
                     .map(|(k, hit)| {
                         let at = t.pieces[hit.start].start;
                         let (text, matched) = snippet(&t, hit);
                         let path = path.clone();
                         div()
-                            .id(("hit", i * SHOWN_MATCHES + k))
+                            .id(SharedString::from(format!("hit-{i}-{k}")))
                             .flex()
                             .items_center()
                             .gap(px(10.))
@@ -2030,7 +2036,7 @@ impl LibraryView {
                     })
                     .collect::<Vec<_>>()
             });
-            let more = hits.len().saturating_sub(SHOWN_MATCHES);
+            let more = hits.len().saturating_sub(shown);
             div().flex().gap(px(16.)).child(thumbnail).child(
                 div()
                     .flex_1()
@@ -2063,13 +2069,24 @@ impl LibraryView {
                     )
                     .children(lines.into_iter().flatten())
                     .when(more > 0, |d| {
+                        // In a row of its own, so it's only as wide as its label.
                         d.child(
-                            div()
-                                .px(px(8.))
-                                .pt(px(2.))
-                                .text_size(px(12.))
-                                .text_color(theme.text_muted)
-                                .child(format!("and {more} more")),
+                            div().flex().child(
+                                div()
+                                    .id(("more-matches", i))
+                                    .px(px(8.))
+                                    .py(px(2.))
+                                    .rounded(px(6.))
+                                    .cursor_pointer()
+                                    .text_size(px(12.))
+                                    .text_color(theme.text_muted)
+                                    .hover(|s| s.bg(theme.control_hover).text_color(theme.text))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.expanded.push(path.clone());
+                                        cx.notify();
+                                    }))
+                                    .child(format!("Show {more} more")),
+                            ),
                         )
                     }),
             )
