@@ -1390,17 +1390,22 @@ impl LibraryView {
                         let path = path.clone();
                         move |this, _, _, cx| this.edit(path.clone(), cx)
                     })))
-                    .child(header_button("reveal", "Show in Finder").on_click({
-                        let path = path.clone();
-                        move |_, _, _| native::reveal_in_finder(&path)
-                    }))
-                    .child(header_button("rename", "Rename…").on_click(cx.listener({
-                        let path = path.clone();
-                        move |this, _, window, cx| this.rename(path.clone(), window, cx)
-                    })))
-                    .child(header_button("trash", "Move to Trash").on_click(
-                        cx.listener(move |this, _, _, cx| this.trash(vec![path.clone()], cx)),
-                    )),
+                    // The rest wait in a menu, so the header fits narrow windows.
+                    .child(header_button("more", "⋯").on_click(cx.listener(
+                        move |this, event: &ClickEvent, _, cx| {
+                            this.menu = Some(Menu {
+                                paths: vec![path.clone()],
+                                at: event.position(),
+                                actions: vec![
+                                    Some(Action::Reveal),
+                                    Some(Action::Rename),
+                                    None,
+                                    Some(Action::Trash),
+                                ],
+                            });
+                            cx.notify();
+                        },
+                    ))),
             )
             .into_any_element()
     }
