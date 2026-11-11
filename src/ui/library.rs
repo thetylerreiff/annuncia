@@ -1139,10 +1139,19 @@ impl LibraryView {
 
     /// The menu for the card at `index`: for the whole selection when the card is part of it,
     /// else for that card alone, which becomes the selection, as in Finder.
-    fn open_card_menu(&mut self, index: usize, at: Point<Pixels>, cx: &mut Context<Self>) {
+    fn open_card_menu(
+        &mut self,
+        index: usize,
+        at: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(path) = self.items.get(index).map(|i| i.entry.path.clone()) else {
             return;
         };
+        // Its keys (Esc, ⌫) go to the grid, not the search field.
+        native::focus_search_field(window, None);
+        window.focus(&self.focus);
         if !self.selection.contains(&path) {
             self.select(index, Select::Only, cx);
         }
@@ -1322,9 +1331,9 @@ impl LibraryView {
                     .child(
                         more_button(("more", index), theme)
                             .tooltip(tip("More"))
-                            .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                                 cx.stop_propagation();
-                                this.open_card_menu(index, event.position(), cx);
+                                this.open_card_menu(index, event.position(), window, cx);
                             })),
                     ),
             );
@@ -1339,16 +1348,16 @@ impl LibraryView {
             .cursor_pointer()
             .on_mouse_down(
                 MouseButton::Right,
-                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                    this.open_card_menu(index, event.position, cx)
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    this.open_card_menu(index, event.position, window, cx)
                 }),
             )
             // ⌃-click is a right-click on the Mac.
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                     if event.modifiers.control {
-                        this.open_card_menu(index, event.position, cx)
+                        this.open_card_menu(index, event.position, window, cx)
                     }
                 }),
             )
@@ -1462,7 +1471,9 @@ impl LibraryView {
                     .child(
                         header_button("more", "⋯")
                             .tooltip(tip("More"))
-                            .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                                native::focus_search_field(window, None);
+                                window.focus(&this.focus);
                                 this.menu = Some(Menu {
                                     paths: vec![path.clone()],
                                     at: event.position(),
