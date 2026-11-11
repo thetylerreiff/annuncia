@@ -677,10 +677,52 @@ const bubble = (() => {
   return { ready: () => { bmp = null; draw(); } };
 })();
 
-/* Menu bar popover toggles */
-$$('.popover .po-row').forEach((b) => b.addEventListener('click', () => b.setAttribute('aria-pressed', String(b.getAttribute('aria-pressed') !== 'true'))));
-$$('.po-seg button').forEach((b) => b.addEventListener('click', () => $$('.po-seg button').forEach((o) => o.setAttribute('aria-checked', String(o === b)))));
-$('.po-go').addEventListener('click', (e) => {
+/* Menu bar panel: tiles toggle, the mode is a radio group, the device rows open their lists */
+(() => {
+  const panel = $('.popover');
+  const flip = (b) => b.setAttribute('aria-pressed', String(b.getAttribute('aria-pressed') !== 'true'));
+  $$('.pn-tog, .pn-sys', panel).forEach((b) => b.addEventListener('click', () => flip(b)));
+
+  const modes = $$('.pn-mode', panel);
+  const pick = (b, focus) => modes.forEach((o) => {
+    o.setAttribute('aria-checked', String(o === b));
+    o.tabIndex = o === b ? 0 : -1;
+    if (o === b && focus) o.focus();
+  });
+  modes.forEach((b, i) => {
+    b.addEventListener('click', () => pick(b));
+    b.addEventListener('keydown', (e) => {
+      const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+      if (!step) return;
+      e.preventDefault();
+      pick(modes[(i + step + modes.length) % modes.length], true);
+    });
+  });
+
+  $$('.pn-pick', panel).forEach((b) => {
+    const list = document.getElementById(b.getAttribute('aria-controls'));
+    const name = $('small', b);
+    b.addEventListener('click', () => {
+      const open = b.getAttribute('aria-expanded') !== 'true';
+      b.setAttribute('aria-expanded', String(open));
+      list.hidden = !open;
+    });
+    $$('button', list).forEach((o) => o.addEventListener('click', () => {
+      $$('button', list).forEach((x) => x.setAttribute('aria-checked', String(x === o)));
+      name.textContent = o.textContent;
+      b.setAttribute('aria-expanded', 'false');
+      list.hidden = true;
+      b.focus();
+    }));
+    list.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      b.setAttribute('aria-expanded', 'false');
+      list.hidden = true;
+      b.focus();
+    });
+  });
+})();
+$('.pn-rec').addEventListener('click', (e) => {
   // Back to the top: the take starts when the art goes into the notch.
   if (reduced) return;
   e.preventDefault();

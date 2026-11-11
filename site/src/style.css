@@ -407,21 +407,48 @@ h3 + .body { margin-top: 12px; }
 [aria-pressed="true"] > .sw::after { transform: translateX(12px); }
 .tog[aria-pressed="true"] { color: var(--text); }
 
-.rec-more { display: grid; grid-template-columns: 1fr 1fr minmax(260px, 300px); gap: clamp(28px, 4vw, 64px); margin-top: clamp(64px, 7vw, 110px); align-items: start; }
+.rec-more { display: grid; grid-template-columns: 1fr 1fr 320px; gap: clamp(28px, 4vw, 64px); margin-top: clamp(64px, 7vw, 110px); align-items: start; }
 .rec-more .body { font-size: 16.5px; }
-.popover { border-radius: 14px; padding: 8px; background: rgba(10, 10, 12, .9); box-shadow: 0 0 0 1px var(--line2), 0 30px 80px -20px rgba(0, 0, 0, .8); display: grid; gap: 2px; }
-.po-seg { display: grid; grid-template-columns: 1fr 1fr; padding: 3px; border-radius: 9px; background: rgba(255, 255, 255, .05); margin-bottom: 6px; }
-.po-seg button { height: 32px; border-radius: 7px; font-size: 14px; font-weight: 600; color: var(--soft); }
-.po-seg button[aria-checked="true"] { background: var(--blue); color: #fff; }
-.po-row { display: flex; align-items: center; justify-content: space-between; height: 40px; padding: 0 8px; border-radius: 7px; font-size: 14.5px; font-weight: 500; text-align: left; }
-.po-row:hover { background: rgba(255, 255, 255, .05); }
-.po-go { margin-top: 6px; height: 40px; border-radius: 8px; display: flex; align-items: center; justify-content: center; gap: 9px; font-size: 14.5px; font-weight: 600; background: rgba(255, 255, 255, .08); }
-.po-go:hover { background: rgba(255, 255, 255, .13); }
+/* The menu bar panel, as src/ui/launcher.rs draws it: Control Center tiles on black glass. */
+.popover { width: 320px; max-width: 100%; border-radius: 18px; padding: 12px; background: rgba(10, 10, 12, .92); box-shadow: 0 0 0 1px var(--line2), 0 30px 80px -20px rgba(0, 0, 0, .8); display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.pn-sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+.ic { fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.pn-tile { display: flex; align-items: center; border-radius: 14px; background: rgba(255, 255, 255, .075); text-align: left; }
+button.pn-tile:hover { background: rgba(255, 255, 255, .12); }
+.pn-modes { display: flex; gap: 8px; }
+.pn-mode { flex: 1; min-width: 0; flex-direction: column; align-items: flex-start; gap: 8px; padding: 10px; }
+.pn-txt { display: block; min-width: 0; width: 100%; }
+.pn-txt b { display: block; font-weight: 500; font-size: 13px; line-height: 1.3; }
+.pn-txt small { display: block; font-size: 11.5px; line-height: 1.3; color: rgba(255, 255, 255, .48); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The round icon leading each tile: filled with the accent while it's on. */
+.pn-ic { width: 28px; height: 28px; flex: none; border-radius: 50%; display: grid; place-items: center; background: rgba(255, 255, 255, .14); color: rgba(242, 242, 245, .95); transition: background .2s; }
+.pn-ic .ic { width: 15px; height: 15px; }
+[aria-checked="true"] > .pn-ic, [aria-pressed="true"] > .pn-ic, .pn-ic[aria-pressed="true"] { background: var(--blue); color: #fff; }
+.pn-tog { margin-left: 10px; }
+.pn-tog:hover { opacity: .85; }
+.pn-pick { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 9px 10px 9px 10px; border-radius: 14px; text-align: left; }
+.pn-chev { width: 14px; height: 14px; flex: none; color: rgba(255, 255, 255, .48); }
+.pn-pick[aria-expanded="true"] .pn-chev { transform: rotate(90deg); }
+.pn-opts { margin-top: 8px; display: flex; flex-direction: column; gap: 1px; padding: 4px; border-radius: 14px; background: rgba(255, 255, 255, .075); }
+.pn-opts[hidden] { display: none; }
+.pn-opts button { display: flex; justify-content: space-between; padding: 6px 10px; border-radius: 10px; font-size: 12.5px; text-align: left; }
+.pn-opts button:hover { background: rgba(255, 255, 255, .12); }
+.pn-opts button[aria-checked="true"]::after { content: "✓"; color: #7a7aff; }
+.pn-row { display: flex; gap: 8px; }
+.pn-sys { flex: 1; min-width: 0; height: 48px; padding: 0 10px; gap: 9px; font-weight: 500; white-space: nowrap; }
+.pn-rec { flex: 1; min-width: 0; height: 48px; border-radius: 14px; display: flex; align-items: center; justify-content: center; gap: 7px; background: var(--red); color: #fff; font-weight: 600; transition: opacity .2s; }
+.pn-rec:hover { opacity: .9; }
+.pn-dot { width: 10px; height: 10px; border-radius: 50%; background: #fff; }
+.pn-rec kbd { font: inherit; font-size: 11px; font-weight: 400; padding: 1px 5px; border-radius: 4px; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .34); color: rgba(255, 255, 255, .85); }
+.pn-foot { display: flex; align-items: center; gap: 2px; padding-left: 4px; font-size: 11.5px; color: rgba(255, 255, 255, .48); }
+.pn-foot > span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pn-fi { width: 26px; height: 26px; display: grid; place-items: center; }
+.pn-fi .ic { width: 15px; height: 15px; }
 
 @media (max-width: 1020px) {
   .rec-head { grid-template-columns: minmax(0, 1fr); }
   .rec-more { grid-template-columns: 1fr 1fr; }
-  .popover { grid-column: 1 / -1; max-width: 320px; }
+  .popover { grid-column: 1 / -1; }
 }
 @media (max-width: 640px) {
   .an-notch { --s: .92; }
@@ -747,7 +774,7 @@ h3 + .body { margin-top: 12px; }
   .notch .rdot, .an-notch .rdot { animation: none; }
   .nav, .nav::before { transition: none; }
   .nav-sheet { animation: none; }
-  .seg-el, .wing, .bubble, .dw-chart i { transition: none; }
+  .seg-el, .wing, .bubble, .dw-chart i, .pn-ic, .pn-rec { transition: none; }
   .chip { animation: none; }
   .kw { transition: none; }
 }
